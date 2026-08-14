@@ -1,0 +1,50 @@
+{
+  "name": "@notavia/sdk",
+  "version": "1.0.0",
+  "description": "Official TypeScript SDK for Notavia — send transactional email and manage templates.",
+  "license": "MIT",
+  "publishConfig": { "access": "public" },
+  "repository": { "type": "git", "url": "https://github.com/saas-infrastructure/notavia-sdk.git" },
+  "homepage": "https://github.com/saas-infrastructure/notavia-sdk",
+  "keywords": ["notavia", "notifications", "email", "sdk", "saasinfrastructure"],
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs",
+      "types": "./dist/index.d.ts"
+    },
+    "./inbox": {
+      "import": "./dist/inbox/index.js",
+      "require": "./dist/inbox/index.cjs",
+      "types": "./dist/inbox/index.d.ts"
+    },
+    "./prefs": {
+      "import": "./dist/prefs/index.js",
+      "require": "./dist/prefs/index.cjs",
+      "types": "./dist/prefs/index.d.ts"
+    },
+    "./webhooks": {
+      "import": "./dist/webhooks/index.js",
+      "require": "./dist/webhooks/index.cjs",
+      "types": "./dist/webhooks/index.d.ts"
+    }
+  },
+  "engines": { "node": ">=20.0.0" },
+  "files": ["dist", "README.md"],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.4.0"
+  }
+}

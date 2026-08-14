@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <PackageId>Notavia.Sdk.AspNetCore</PackageId>
+    <AssemblyName>Notavia.Sdk.AspNetCore</AssemblyName>
+    <Description>ASP.NET Core extension for Notavia.Sdk — MapWebhookHandler endpoint helper for receiving signed Notavia webhook events.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>notavia;notifications;webhooks;sdk;aspnetcore;saasinfrastructure</PackageTags>
+    <RootNamespace>NotifyService.Sdk.AspNetCore</RootNamespace>
+    <NoWarn>$(NoWarn);NU5104</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" Condition="Exists('README.md')" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="..\NotifyService.Sdk\NotifyService.Sdk.csproj" />
+  </ItemGroup>
+
+</Project>

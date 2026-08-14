@@ -1,0 +1,11 @@
+generatorName: go
+packageName: generated
+gitHost: github.com
+gitUserId: saas-infrastructure
+gitRepoId: notavia-sdk
+additionalProperties:
+  isGoSubmodule: "true"
+  withGoMod: "false"
+  packageVersion: "1.0.0"
+  hideGenerationTimestamp: "true"
+  enumClassPrefix: "true"

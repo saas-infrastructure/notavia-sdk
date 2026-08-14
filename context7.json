@@ -1,0 +1,28 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "Notavia SDKs",
+  "description": "Official client SDKs for Notavia, a white-label notification engine — transactional email, in-app inbox, SMS and chat from one REST API, branded as your product rather than as Notavia.",
+  "branch": "main",
+  "folders": ["dotnet", "typescript", "python", "go", "java", "php", "spec"],
+  "excludeFolders": [
+    "**/node_modules",
+    "**/dist",
+    "**/bin",
+    "**/obj",
+    "**/vendor",
+    "**/target",
+    "**/__pycache__",
+    "**/test",
+    "**/tests"
+  ],
+  "excludeFiles": ["CHANGELOG.md"],
+  "rules": [
+    "Authenticate with a bearer API key. Keys are per environment and prefixed nsk_test_ or nsk_live_; the two environments are fully isolated, a test key records sends but never delivers or bills them, and a test template is not visible to a live key.",
+    "Send with POST /v1/notifications, supplying a recipient plus either inline content or a template key. One notification is one message to one recipient on one channel.",
+    "A template's sends always use its latest published version. Saving a draft changes nothing until it is published, via the dashboard or POST /v1/templates/{key}/publish.",
+    "Pass an idempotency key on write requests, as Idempotency-Key on REST or idempotencyKey/idempotency_key in the SDKs. Repeating a request with the same key within 24 hours returns the original response without re-sending.",
+    "Verify the signature on every inbound webhook before acting on it, and make handlers idempotent on the event id — the id is stable across retries of the same event.",
+    "Per-message from_name and reply_to must resolve to a verified sender domain. Verifying a sender domain is also what unlocks live sending.",
+    "Delivery is asynchronous. A successful send response means accepted, not delivered; use the delivery webhooks for the outcome."
+  ]
+}

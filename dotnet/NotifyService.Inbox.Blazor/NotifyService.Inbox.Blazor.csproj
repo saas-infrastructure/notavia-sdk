@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <PackageId>Notavia.Inbox.Blazor</PackageId>
+    <AssemblyName>Notavia.Inbox.Blazor</AssemblyName>
+    <Description>Blazor Razor component that mounts the Notavia in-app inbox web component, bridging events to EventCallback&lt;T&gt; parameters via JS interop.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>notavia;inbox;blazor;component;saasinfrastructure</PackageTags>
+    <RootNamespace>NotifyService.Inbox.Blazor</RootNamespace>
+    <StaticWebAssetBasePath>_content/NotifyService.Inbox.Blazor</StaticWebAssetBasePath>
+    <IsPackable>true</IsPackable>
+    <NoWarn>$(NoWarn);NU5119</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" Condition="Exists('README.md')" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <InboxWebComponentDist>$(MSBuildThisFileDirectory)..\..\typescript\notifyservice-inbox\dist\notifyservice-inbox.umd.js</InboxWebComponentDist>
+    <InboxWebComponentMap>$(MSBuildThisFileDirectory)..\..\typescript\notifyservice-inbox\dist\notifyservice-inbox.umd.js.map</InboxWebComponentMap>
+  </PropertyGroup>
+
+  <Target Name="VendorInboxWebComponent" BeforeTargets="ResolveStaticWebAssetsInputs">
+    <Error
+      Condition="!Exists('$(InboxWebComponentDist)')"
+      Text="Missing $(InboxWebComponentDist). Run 'npm run build' in sdks/typescript/notifyservice-inbox first." />
+    <Copy
+      SourceFiles="$(InboxWebComponentDist)"
+      DestinationFiles="$(MSBuildThisFileDirectory)wwwroot\notifyservice-inbox.umd.js"
+      SkipUnchangedFiles="true" />
+    <Copy
+      Condition="Exists('$(InboxWebComponentMap)')"
+      SourceFiles="$(InboxWebComponentMap)"
+      DestinationFiles="$(MSBuildThisFileDirectory)wwwroot\notifyservice-inbox.umd.js.map"
+      SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

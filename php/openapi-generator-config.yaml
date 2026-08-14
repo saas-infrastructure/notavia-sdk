@@ -1,0 +1,7 @@
+generatorName: php-nextgen
+invokerPackage: "NotifyService\\Api"
+srcBasePath: lib
+composerPackageName: notavia/notavia
+additionalProperties:
+  packageVersion: "1.0.0"
+  hideGenerationTimestamp: "true"

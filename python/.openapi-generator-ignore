@@ -1,0 +1,15 @@
+pyproject.toml
+README.md
+setup.py
+setup.cfg
+tox.ini
+requirements.txt
+test-requirements.txt
+git_push.sh
+.gitignore
+.travis.yml
+notifyservice_api_README.md
+notifyservice/
+notifyservice/**
+tests/
+tests/**

@@ -1,0 +1,13 @@
+generatorName: java
+library: native
+invokerPackage: com.notifyservice.api
+apiPackage: com.notifyservice.api.api
+modelPackage: com.notifyservice.api.model
+groupId: com.saas-infrastructure.notavia
+artifactId: notavia
+sourceFolder: src/main/java
+additionalProperties:
+  dateLibrary: java8
+  useJakartaEe: "true"
+  packageVersion: "1.0.0"
+  hideGenerationTimestamp: "true"

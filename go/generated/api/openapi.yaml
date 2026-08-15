@@ -1,0 +1,5189 @@
+openapi: 3.1.0
+info:
+  description: |
+    White-label notification engine. Authenticate with a bearer API key issued
+    per environment. All `/v1/*` paths require `Authorization: Bearer <api_key>`.
+
+    The OAuth install/callback routes (`/oauth/slack/*`) require cookie
+    authentication (dashboard session) rather than an API key.
+  title: Notavia API
+  version: 1.0.0
+servers:
+- description: Self-hosted deployment
+  url: https://your-notavia-host
+security:
+- apiKey: []
+tags:
+- description: Send and query notification records.
+  name: Notifications
+- description: Current-period send usage and plan limits.
+  name: Usage
+- description: Manage notification templates and per-channel bodies.
+  name: Templates
+- description: "End-user in-app inbox (uses short-lived inbox JWT, not API key)."
+  name: Inbox
+- description: Notification category definitions and per-user opt-in cells.
+  name: Preferences
+- description: Outbound webhook endpoints for notification lifecycle events.
+  name: Webhooks
+- description: "Per-environment blocklist of email addresses (bounces, complaints,\
+    \ manual)."
+  name: Suppressions
+- description: SMS provider configuration per environment.
+  name: SMS
+- description: Slack workspace installations via OAuth 2.0.
+  name: Slack
+- description: Microsoft Teams webhook endpoints.
+  name: Teams
+- description: Discord webhook endpoints.
+  name: Discord
+- description: "Per-tenant versioned JSON workflow engine — author, activate, trigger,\
+    \ and observe multi-step notification flows."
+  name: Workflows
+- description: "Internal tooling endpoints (anonymous, non-versioned)."
+  name: Internal
+paths:
+  /v1/notifications:
+    get:
+      operationId: ListNotifications
+      parameters:
+      - explode: true
+        in: query
+        name: status
+        required: false
+        schema:
+          enum:
+          - queued
+          - sending
+          - sent
+          - failed
+          - suppressed
+          - delivered
+          - bounced
+          - complained
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: recipient
+        required: false
+        schema:
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: created_after
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: created_before
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          default: 20
+          maximum: 100
+          minimum: 1
+          type: integer
+        style: form
+      - explode: true
+        in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationPage'
+          description: Paginated list of notifications.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+      summary: List notifications with cursor pagination
+      tags:
+      - Notifications
+    post:
+      description: |
+        Persists the notification and dispatches it via the requested channel.
+        Returns `202 Accepted` on the first successful call. Returns `200 OK`
+        when the same `Idempotency-Key` is replayed within 24 hours.
+      operationId: SendNotification
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendNotificationRequest'
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationResponse'
+          description: Notification accepted and queued for dispatch.
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationResponse'
+          description: Idempotent replay — previously accepted notification returned.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "409":
+          $ref: '#/components/responses/Conflict'
+      security:
+      - apiKey: []
+      summary: Send a notification
+      tags:
+      - Notifications
+  /v1/notifications/{id}:
+    get:
+      operationId: GetNotification
+      parameters:
+      - explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationResponse'
+          description: Notification record.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Get a notification by id
+      tags:
+      - Notifications
+  /v1/usage:
+    get:
+      description: |
+        Returns the calling organization's live (non-test) send usage for the
+        current calendar-month billing period, the resolved plan, its included
+        send allowance, and a per-channel breakdown. Test-environment sends are
+        not counted. Readable by any valid API key.
+      operationId: GetUsage
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageResponse'
+          description: Current-period usage and plan limits.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - apiKey: []
+      summary: Get current-period usage and plan limits
+      tags:
+      - Usage
+  /v1/suppressions:
+    get:
+      description: |
+        Returns a cursor-paginated list of suppressed addresses for the
+        authenticated environment. Requires a full-access API key.
+      operationId: ListSuppressions
+      parameters:
+      - description: Filter to entries whose address equals this value.
+        explode: true
+        in: query
+        name: address
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: |
+          Filter by suppression reason (case-insensitive). Note these filter
+          values are the enum names, distinct from the snake_case values
+          returned in the `reason` response field.
+        explode: true
+        in: query
+        name: reason
+        required: false
+        schema:
+          enum:
+          - HardBounce
+          - Complaint
+          - ManualAdd
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          default: 25
+          maximum: 100
+          minimum: 1
+          type: integer
+        style: form
+      - explode: true
+        in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuppressionPage'
+          description: Paginated list of suppressed addresses.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+      summary: List suppressed addresses with cursor pagination
+      tags:
+      - Suppressions
+    post:
+      description: |
+        Manually adds an address to the suppression list. If the address is
+        already suppressed, the existing entry is returned with `200` instead of
+        `201`. Requires a full-access API key.
+      operationId: AddSuppression
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddSuppressionRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuppressionResponse'
+          description: The address was added to the suppression list.
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuppressionResponse'
+          description: The address was already suppressed; the existing entry is returned.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+      summary: Manually add an address to the suppression list
+      tags:
+      - Suppressions
+  /v1/suppressions/{address}:
+    delete:
+      description: Requires a full-access API key.
+      operationId: RemoveSuppression
+      parameters:
+      - description: The email address to remove. URL-encode special characters.
+        explode: false
+        in: path
+        name: address
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "204":
+          description: The address was removed from the suppression list.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Remove an address from the suppression list
+      tags:
+      - Suppressions
+    get:
+      description: Requires a full-access API key.
+      operationId: GetSuppression
+      parameters:
+      - description: The email address to look up. URL-encode special characters.
+        explode: false
+        in: path
+        name: address
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuppressionResponse'
+          description: The suppression entry for the address.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Get a suppression by address
+      tags:
+      - Suppressions
+  /v1/templates:
+    get:
+      operationId: ListTemplates
+      parameters:
+      - explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          default: 20
+          type: integer
+        style: form
+      - explode: true
+        in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplatePage'
+          description: Paginated list of templates.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+      summary: List templates with cursor pagination
+      tags:
+      - Templates
+    post:
+      operationId: CreateTemplate
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTemplateRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplateResponse'
+          description: Template created.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "409":
+          $ref: '#/components/responses/Conflict'
+      summary: Create a template
+      tags:
+      - Templates
+  /v1/templates/{key}:
+    delete:
+      operationId: DeleteTemplate
+      parameters:
+      - explode: false
+        in: path
+        name: key
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "204":
+          description: Deleted.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Delete a template
+      tags:
+      - Templates
+    get:
+      operationId: GetTemplate
+      parameters:
+      - explode: false
+        in: path
+        name: key
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplateResponse'
+          description: Template record.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Get a template by key
+      tags:
+      - Templates
+    patch:
+      operationId: UpdateTemplate
+      parameters:
+      - explode: false
+        in: path
+        name: key
+        required: true
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTemplateRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplateResponse'
+          description: Updated template.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Update fields on an existing template
+      tags:
+      - Templates
+  /v1/templates/{key}/render:
+    post:
+      operationId: RenderTemplate
+      parameters:
+      - explode: false
+        in: path
+        name: key
+        required: true
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenderTemplate_request'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RenderTemplateResponse'
+          description: Rendered output.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Render a template with sample data (does not send)
+      tags:
+      - Templates
+  /v1/templates/{key}/promote:
+    post:
+      description: |
+        Copies the template — and all of its channel bodies — from the Test
+        environment into Live, matched by `key`: created when the key does not
+        yet exist in Live, otherwise overwritten. With `dry_run` the diff is
+        returned without writing. A promotion whose result is `identical` is a
+        no-op.
+      operationId: PromoteTemplate
+      parameters:
+      - explode: false
+        in: path
+        name: key
+        required: true
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PromoteTemplateRequest'
+        required: false
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromotionResult'
+          description: Promotion result. The diff is returned for both dry runs and
+            applied promotions.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Promote a template from Test to Live
+      tags:
+      - Templates
+  /v1/templates/{id}/bodies/{channel}:
+    delete:
+      operationId: DeleteTemplateChannelBody
+      parameters:
+      - explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: channel
+        required: true
+        schema:
+          $ref: '#/components/schemas/NotificationChannelKebab'
+        style: simple
+      responses:
+        "204":
+          description: Deleted.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+      summary: Delete a channel body from a template
+      tags:
+      - Templates
+    put:
+      description: |
+        Upserts the body for the given channel. `channel` must be one of:
+        `email`, `in_app`, `sms`, `slack`, `teams`, `discord`.
+        Returns `200 OK` when updating an existing body; `201 Created` when
+        creating one for the first time.
+      operationId: PutTemplateChannelBody
+      parameters:
+      - explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: channel
+        required: true
+        schema:
+          $ref: '#/components/schemas/NotificationChannelKebab'
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PutTemplateBodyRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplateChannelBodyResponse'
+          description: Body updated.
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplateChannelBodyResponse'
+          description: Body created.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+      summary: Create or replace a channel body for a template
+      tags:
+      - Templates
+  /inbox/v1/tokens/verify:
+    post:
+      operationId: VerifyInboxToken
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyTokenResponse'
+          description: Verified identity.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - inboxJwt: []
+      summary: Verify an inbox JWT and return the resolved identity
+      tags:
+      - Inbox
+  /inbox/v1/feed:
+    get:
+      operationId: GetInboxFeed
+      parameters:
+      - explode: true
+        in: query
+        name: status
+        required: false
+        schema:
+          default: all
+          enum:
+          - all
+          - read
+          - unread
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          default: 20
+          type: integer
+        style: form
+      - explode: true
+        in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxFeedPage'
+          description: Inbox feed page.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - inboxJwt: []
+      summary: Get the paginated in-app notification feed for the current user
+      tags:
+      - Inbox
+  /inbox/v1/notifications/{id}:
+    get:
+      operationId: GetInboxItem
+      parameters:
+      - explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxItemResponse'
+          description: Inbox item.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      security:
+      - inboxJwt: []
+      summary: Get a single inbox item
+      tags:
+      - Inbox
+  /inbox/v1/notifications/{id}/read:
+    post:
+      operationId: MarkInboxItemRead
+      parameters:
+      - explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarkReadResponse'
+          description: Item marked read.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      security:
+      - inboxJwt: []
+      summary: Mark an inbox item as read
+      tags:
+      - Inbox
+  /inbox/v1/notifications/mark-all-read:
+    post:
+      operationId: MarkAllInboxItemsRead
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MarkAllInboxItemsRead_request'
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarkAllReadResponse'
+          description: Bulk-mark result.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - inboxJwt: []
+      summary: Mark all inbox items as read (optionally scoped to a cutoff time)
+      tags:
+      - Inbox
+  /inbox/v1/unread-count:
+    get:
+      operationId: GetInboxUnreadCount
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnreadCountResponse'
+          description: Unread count.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - inboxJwt: []
+      summary: Get the unread notification count for the current user
+      tags:
+      - Inbox
+  /v1/preferences/categories:
+    get:
+      operationId: ListCategories
+      parameters:
+      - explode: true
+        in: query
+        name: include_archived
+        required: false
+        schema:
+          default: false
+          type: boolean
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryListResponse'
+          description: Categories list.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+      summary: List notification categories
+      tags:
+      - Preferences
+    post:
+      operationId: CreateCategory
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCategoryRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryResponse'
+          description: Category created.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "409":
+          $ref: '#/components/responses/Conflict'
+      summary: Create a notification category
+      tags:
+      - Preferences
+  /v1/preferences/categories/{key}:
+    delete:
+      operationId: ArchiveCategory
+      parameters:
+      - explode: false
+        in: path
+        name: key
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "204":
+          description: Archived.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "409":
+          $ref: '#/components/responses/Conflict'
+      summary: Archive a notification category
+      tags:
+      - Preferences
+    put:
+      operationId: UpdateCategory
+      parameters:
+      - explode: false
+        in: path
+        name: key
+        required: true
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCategoryRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryResponse'
+          description: Updated category.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Update a notification category
+      tags:
+      - Preferences
+  /v1/preferences/users/{externalUserId}:
+    get:
+      operationId: GetUserPreferences
+      parameters:
+      - explode: false
+        in: path
+        name: externalUserId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPreferencesResponse'
+          description: Effective preferences.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+      summary: Get effective preferences for a user
+      tags:
+      - Preferences
+    put:
+      operationId: BulkSetUserPreferences
+      parameters:
+      - explode: false
+        in: path
+        name: externalUserId
+        required: true
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BulkSetUserPreferencesRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPreferencesResponse'
+          description: Updated preferences.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+      summary: Bulk-upsert preference cells for a user
+      tags:
+      - Preferences
+  /v1/preferences/users/{externalUserId}/{categoryKey}/{channel}:
+    patch:
+      operationId: PatchUserPreference
+      parameters:
+      - explode: false
+        in: path
+        name: externalUserId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: categoryKey
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: channel
+        required: true
+        schema:
+          $ref: '#/components/schemas/NotificationChannelKebab'
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchUserPreference_request'
+        required: true
+      responses:
+        "200":
+          description: Updated preference cell.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "409":
+          $ref: '#/components/responses/Conflict'
+      summary: Set a single preference cell for a user
+      tags:
+      - Preferences
+  /v1/webhook-endpoints:
+    get:
+      operationId: ListWebhookEndpoints
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookEndpointListResponse'
+          description: Webhook endpoints list.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+      summary: List webhook endpoints
+      tags:
+      - Webhooks
+    post:
+      operationId: CreateWebhookEndpoint
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWebhookEndpointRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookEndpointResponse'
+          description: Endpoint created.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "409":
+          $ref: '#/components/responses/Conflict'
+      summary: Create a webhook endpoint
+      tags:
+      - Webhooks
+  /v1/webhook-endpoints/{id}:
+    delete:
+      operationId: DeleteWebhookEndpoint
+      parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      responses:
+        "204":
+          description: Deleted.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Delete (soft-disable) a webhook endpoint
+      tags:
+      - Webhooks
+    get:
+      operationId: GetWebhookEndpoint
+      parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookEndpointResponse'
+          description: Webhook endpoint.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Get a webhook endpoint
+      tags:
+      - Webhooks
+    put:
+      operationId: UpdateWebhookEndpoint
+      parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateWebhookEndpointRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookEndpointResponse'
+          description: Updated endpoint.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Update a webhook endpoint
+      tags:
+      - Webhooks
+  /v1/webhook-endpoints/{id}/rotate-secret:
+    post:
+      operationId: RotateWebhookEndpointSecret
+      parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookEndpointResponse'
+          description: Updated endpoint with new signing secret prefix.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Rotate the signing secret for a webhook endpoint
+      tags:
+      - Webhooks
+  /v1/webhook-endpoints/{id}/send-test:
+    post:
+      operationId: SendWebhookTestEvent
+      parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookDeliveryResponse'
+          description: Test delivery queued.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Send a test event to a webhook endpoint
+      tags:
+      - Webhooks
+  /v1/webhook-endpoints/{id}/deliveries:
+    get:
+      operationId: ListWebhookDeliveries
+      parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      - explode: true
+        in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookDeliveryListResponse'
+          description: Delivery list.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: List deliveries for a webhook endpoint
+      tags:
+      - Webhooks
+  /v1/webhook-endpoints/{id}/deliveries/{deliveryId}:
+    get:
+      operationId: GetWebhookDelivery
+      parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      - explode: false
+        in: path
+        name: deliveryId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookDeliveryResponse'
+          description: Delivery record.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Get a single webhook delivery
+      tags:
+      - Webhooks
+  /v1/webhook-endpoints/{id}/deliveries/{deliveryId}/retry:
+    post:
+      operationId: RetryWebhookDelivery
+      parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      - explode: false
+        in: path
+        name: deliveryId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookDeliveryResponse'
+          description: Delivery re-queued.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Re-queue a webhook delivery for immediate retry
+      tags:
+      - Webhooks
+  /v1/environments/{envId}/sms-settings:
+    delete:
+      operationId: DeleteSmsSettings
+      parameters:
+      - explode: false
+        in: path
+        name: envId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      responses:
+        "204":
+          description: Deleted.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Delete SMS provider settings for an environment
+      tags:
+      - SMS
+    get:
+      operationId: GetSmsSettings
+      parameters:
+      - explode: false
+        in: path
+        name: envId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SmsSettingsResponse'
+          description: SMS settings.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Get SMS provider settings for an environment
+      tags:
+      - SMS
+    put:
+      operationId: UpdateSmsSettings
+      parameters:
+      - explode: false
+        in: path
+        name: envId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSmsSettingsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SmsSettingsResponse'
+          description: Updated SMS settings.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+      summary: Create or update SMS provider settings for an environment
+      tags:
+      - SMS
+  /oauth/slack/install:
+    get:
+      description: |
+        Requires an active dashboard session (cookie auth). Redirects the
+        browser to Slack's authorization URL with a JWE-encrypted state token.
+      operationId: StartSlackOAuth
+      parameters:
+      - explode: true
+        in: query
+        name: env_id
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: form
+      responses:
+        "302":
+          description: Redirects to Slack's authorization page.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - cookieAuth: []
+      summary: Start the Slack OAuth 2.0 installation flow
+      tags:
+      - Slack
+  /oauth/slack/callback:
+    get:
+      description: |
+        Slack redirects back here after user approval. On success redirects to
+        `/dashboard/settings/slack?installed=1&team=<team_name>`. On failure
+        redirects to `/dashboard/settings/slack?error=<code>`.
+      operationId: CompleteSlackOAuth
+      parameters:
+      - explode: true
+        in: query
+        name: code
+        required: true
+        schema:
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: state
+        required: true
+        schema:
+          type: string
+        style: form
+      responses:
+        "302":
+          description: Redirects to the dashboard Slack settings page.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+      security:
+      - cookieAuth: []
+      summary: Slack OAuth 2.0 callback — completes the installation
+      tags:
+      - Slack
+  /v1/slack/installations:
+    get:
+      operationId: ListSlackInstallations
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SlackInstallationListResponse'
+          description: Installations list.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+      summary: List Slack workspace installations for this environment
+      tags:
+      - Slack
+  /v1/slack/installations/{id}:
+    delete:
+      operationId: DeleteSlackInstallation
+      parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      responses:
+        "204":
+          description: Deleted.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Delete (revoke) a Slack installation
+      tags:
+      - Slack
+    get:
+      operationId: GetSlackInstallation
+      parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SlackInstallationResponse'
+          description: Installation record.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Get a Slack installation by id
+      tags:
+      - Slack
+    put:
+      operationId: UpdateSlackInstallation
+      parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSlackInstallationRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SlackInstallationResponse'
+          description: Updated installation.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Update settings on a Slack installation
+      tags:
+      - Slack
+  /v1/slack/installations/{id}/send-test:
+    post:
+      operationId: SendSlackTestMessage
+      parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendSlackTestRequest'
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendTestResponse'
+          description: Test notification accepted.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Send a test message via a Slack installation
+      tags:
+      - Slack
+  /v1/teams-endpoints:
+    get:
+      operationId: ListTeamsEndpoints
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamsEndpointListResponse'
+          description: Teams endpoints list.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+      summary: List Microsoft Teams webhook endpoints
+      tags:
+      - Teams
+    post:
+      operationId: CreateTeamsEndpoint
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTeamsEndpointRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamsEndpointResponse'
+          description: Endpoint created.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+      summary: Create a Microsoft Teams webhook endpoint
+      tags:
+      - Teams
+  /v1/teams-endpoints/{id}:
+    delete:
+      operationId: DeleteTeamsEndpoint
+      parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      responses:
+        "204":
+          description: Deleted.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Delete a Teams endpoint
+      tags:
+      - Teams
+    get:
+      operationId: GetTeamsEndpoint
+      parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamsEndpointResponse'
+          description: Teams endpoint.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Get a Teams endpoint by id
+      tags:
+      - Teams
+    put:
+      operationId: UpdateTeamsEndpoint
+      parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTeamsEndpointRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamsEndpointResponse'
+          description: Updated endpoint.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Update a Teams endpoint
+      tags:
+      - Teams
+  /v1/teams-endpoints/{id}/send-test:
+    post:
+      operationId: SendTeamsTestMessage
+      parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendTestResponse'
+          description: Test notification accepted.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Send a test Adaptive Card to a Teams endpoint
+      tags:
+      - Teams
+  /v1/discord-endpoints:
+    get:
+      operationId: ListDiscordEndpoints
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscordEndpointListResponse'
+          description: Discord endpoints list.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+      summary: List Discord webhook endpoints
+      tags:
+      - Discord
+    post:
+      operationId: CreateDiscordEndpoint
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDiscordEndpointRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscordEndpointResponse'
+          description: Endpoint created.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+      summary: Create a Discord webhook endpoint
+      tags:
+      - Discord
+  /v1/discord-endpoints/{id}:
+    delete:
+      operationId: DeleteDiscordEndpoint
+      parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      responses:
+        "204":
+          description: Deleted.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Delete a Discord endpoint
+      tags:
+      - Discord
+    get:
+      operationId: GetDiscordEndpoint
+      parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscordEndpointResponse'
+          description: Discord endpoint.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Get a Discord endpoint by id
+      tags:
+      - Discord
+    put:
+      operationId: UpdateDiscordEndpoint
+      parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateDiscordEndpointRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscordEndpointResponse'
+          description: Updated endpoint.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Update a Discord endpoint
+      tags:
+      - Discord
+  /v1/discord-endpoints/{id}/send-test:
+    post:
+      operationId: SendDiscordTestMessage
+      parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendTestResponse'
+          description: Test notification accepted.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Send a test message to a Discord endpoint
+      tags:
+      - Discord
+  /v1/workflows:
+    get:
+      operationId: ListWorkflows
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListWorkflows_200_response'
+          description: Workflow list returned.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+      summary: List all workflows in the environment
+      tags:
+      - Workflows
+    post:
+      operationId: CreateWorkflow
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkflowRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workflow'
+          description: Workflow created.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "409":
+          $ref: '#/components/responses/Conflict'
+      summary: Create a new workflow
+      tags:
+      - Workflows
+  /v1/workflows/{key}:
+    delete:
+      description: |
+        Sets the workflow status to `Disabled`. Running runs continue to
+        completion; new triggers are rejected with `404`.
+      operationId: DisableWorkflow
+      parameters:
+      - $ref: '#/components/parameters/WorkflowKey'
+      responses:
+        "204":
+          description: Workflow disabled.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Disable a workflow
+      tags:
+      - Workflows
+    get:
+      operationId: GetWorkflow
+      parameters:
+      - $ref: '#/components/parameters/WorkflowKey'
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowDetailResponse'
+          description: Workflow detail returned.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Get a workflow by key
+      tags:
+      - Workflows
+  /v1/workflows/{key}/versions:
+    get:
+      operationId: ListWorkflowVersions
+      parameters:
+      - $ref: '#/components/parameters/WorkflowKey'
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListWorkflowVersions_200_response'
+          description: Version list returned.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: List all versions of a workflow
+      tags:
+      - Workflows
+    post:
+      description: |
+        Parses the supplied JSON body against the workflow DSL. Returns the
+        new version number. The version is left in `Draft` status; call
+        `activate` to promote it.
+      operationId: CreateWorkflowVersion
+      parameters:
+      - $ref: '#/components/parameters/WorkflowKey'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkflowVersionRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowVersion'
+          description: Draft version created.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Create a new draft version
+      tags:
+      - Workflows
+  /v1/workflows/{key}/versions/{n}:
+    get:
+      operationId: GetWorkflowVersion
+      parameters:
+      - $ref: '#/components/parameters/WorkflowKey'
+      - explode: false
+        in: path
+        name: "n"
+        required: true
+        schema:
+          type: integer
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowVersionDetail'
+          description: Version detail returned.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Get a specific workflow version
+      tags:
+      - Workflows
+  /v1/workflows/{key}/versions/{n}/activate:
+    post:
+      description: |
+        Runs the full semantic validator against the version body. If
+        `dry_run=true` the result is returned without persisting the status
+        change — useful for the dashboard "Validate" button. Without
+        `dry_run`, a valid version is promoted to `Active` and the previous
+        active version (if any) is deactivated.
+      operationId: ActivateWorkflowVersion
+      parameters:
+      - $ref: '#/components/parameters/WorkflowKey'
+      - explode: false
+        in: path
+        name: "n"
+        required: true
+        schema:
+          type: integer
+        style: simple
+      - description: "If true, validate without changing persistent state."
+        explode: true
+        in: query
+        name: dry_run
+        required: false
+        schema:
+          default: false
+          type: boolean
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivateWorkflowVersionResponse'
+          description: Validation result (always returned; `valid` indicates whether
+            activation succeeded).
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Activate a draft version (or dry-run validate it)
+      tags:
+      - Workflows
+  /v1/workflows/{key}/promote:
+    post:
+      description: |
+        Promotes the currently active Test version of the workflow into Live as
+        a new version and activates it; the previous Live version is retained
+        for rollback. Referenced templates that are missing or out of date in
+        Live can be promoted in the same atomic operation via
+        `include_templates`. With `dry_run` the diff and cascade candidates are
+        returned without writing.
+      operationId: PromoteWorkflow
+      parameters:
+      - $ref: '#/components/parameters/WorkflowKey'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PromoteWorkflowRequest'
+        required: false
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromotionResult'
+          description: Promotion result. The diff is returned for both dry runs and
+            applied promotions.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "409":
+          $ref: '#/components/responses/Conflict'
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: The promoted version failed semantic validation against the
+            Live environment.
+      summary: Promote a workflow's active version from Test to Live
+      tags:
+      - Workflows
+  /v1/workflows/{key}/trigger:
+    post:
+      description: |
+        Creates a new `WorkflowRun` and enqueues the first step for
+        execution. Idempotent when an `Idempotency-Key` header is supplied —
+        re-sending the same key within 24 hours returns the original run
+        without re-triggering.
+      operationId: TriggerWorkflow
+      parameters:
+      - $ref: '#/components/parameters/WorkflowKey'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        content:
+          application/json:
+            example:
+              trigger_data:
+                invoice_id: inv_42
+                amount_cents: 9900
+                user:
+                  external_user_id: usr_1
+                  email: alice@example.com
+                  phone: "+15005550006"
+                  name: Alice
+            schema:
+              $ref: '#/components/schemas/WorkflowTriggerRequest'
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowTriggerResponse'
+          description: Run created and first step enqueued.
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowTriggerResponse'
+          description: Idempotent replay — existing run returned.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Trigger data failed `trigger_data_schema` validation.
+      summary: Trigger a workflow run
+      tags:
+      - Workflows
+  /v1/workflows/{key}/runs:
+    get:
+      operationId: ListWorkflowRuns
+      parameters:
+      - $ref: '#/components/parameters/WorkflowKey'
+      - explode: true
+        in: query
+        name: status
+        required: false
+        schema:
+          enum:
+          - pending
+          - running
+          - waiting
+          - completed
+          - failed
+          - cancelling
+          - cancelled
+          type: string
+        style: form
+      - description: Filter runs whose trigger data contains this `external_user_id`.
+        explode: true
+        in: query
+        name: external_user_id
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Opaque cursor returned by a previous list response.
+        explode: true
+        in: query
+        name: page_token
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListWorkflowRunsResponse'
+          description: Paginated run list returned.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: List runs for a workflow with cursor pagination
+      tags:
+      - Workflows
+  /v1/workflows/{key}/events:
+    post:
+      description: |
+        Delivers `event_name` to every run of this workflow currently in
+        `Waiting` status (paused on a `wait_for_event` step whose `event`
+        and `match` filter matches). Returns the number of runs awoken.
+      operationId: PostWorkflowKeyEvent
+      parameters:
+      - $ref: '#/components/parameters/WorkflowKey'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostWorkflowEventRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostWorkflowEventResponse'
+          description: Event delivered; awoken run count returned.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+      summary: Post an event to all waiting runs of a workflow
+      tags:
+      - Workflows
+  /v1/workflows/runs/{runId}:
+    get:
+      operationId: GetWorkflowRun
+      parameters:
+      - explode: false
+        in: path
+        name: runId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              example:
+                id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                workflow_key: invoice_paid
+                version: 3
+                status: Waiting
+                current_step_id: step_wait_payment
+                trigger_data: "{\"invoice_id\":\"inv_42\",\"user\":{\"external_user_id\"\
+                  :\"usr_1\"}}"
+                source: Production
+                created_at: 2026-05-30T14:22:11Z
+                completed_at: null
+                failure_reason: null
+                steps:
+                - step_id: step_in_app
+                  kind: Send
+                  attempt_id: 1
+                  status: Completed
+                  outcome: Sent
+                  notification_id: 1fa85f64-5717-4562-b3fc-2c963f66afa7
+                  output_json: "{\"id\":\"1fa85f64-5717-4562-b3fc-2c963f66afa7\",\"\
+                    status\":\"Sent\",\"sent_at\":\"2026-05-30T14:22:12Z\"}"
+                  next_step_id: step_wait_read
+                  next_scheduled_at: null
+                  started_at: 2026-05-30T14:22:12Z
+                  completed_at: 2026-05-30T14:22:12Z
+              schema:
+                $ref: '#/components/schemas/WorkflowRunResponse'
+          description: Run detail with step timeline returned.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Get a run with the full step timeline
+      tags:
+      - Workflows
+  /v1/workflows/runs/{runId}/cancel:
+    post:
+      description: |
+        Transitions the run to `Cancelling` (or immediately `Cancelled` if
+        already in a terminal-adjacent state). Any scheduled `wait_for_event`
+        timeout jobs are cancelled. Running Hangfire step jobs detect the
+        cancellation flag and terminate cleanly.
+      operationId: CancelWorkflowRun
+      parameters:
+      - explode: false
+        in: path
+        name: runId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelWorkflowRun_200_response'
+          description: Cancellation requested; current status returned.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Cancel an in-progress run
+      tags:
+      - Workflows
+  /v1/workflows/runs/{runId}/events:
+    post:
+      description: |
+        Delivers `event_name` to a single run. Wakes the run if it is
+        currently paused on a `wait_for_event` step whose `event` and
+        `match` filter matches the posted data.
+      operationId: PostRunEvent
+      parameters:
+      - explode: false
+        in: path
+        name: runId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostWorkflowEventRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostWorkflowEventResponse'
+          description: Event delivered; awoken run count returned.
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+      summary: Post an event to a specific run
+      tags:
+      - Workflows
+  /workflows/schema.json:
+    get:
+      description: |
+        Returns the embedded `workflow.schema.json` resource. Used by the
+        dashboard Monaco editor to provide structural validation and
+        auto-complete. Anonymous access; cached aggressively
+        (`Cache-Control: public, max-age=3600`). A `X-Schema-Sha256` response
+        header carries the SHA-256 of the content for cache invalidation.
+      operationId: GetWorkflowSchema
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+          description: JSON Schema document returned.
+      security: []
+      summary: Fetch the workflow DSL JSON Schema
+      tags:
+      - Internal
+  /status:
+    get:
+      description: |
+        Returns the current operational status of the service, per-component
+        statuses, any active incidents, and incidents resolved within the last
+        14 days. Anonymous access; no API key required. CORS-enabled for any
+        origin (`InboxEmbeddable` policy).
+      operationId: GetServiceStatus
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceStatusResponse'
+          description: Current service status.
+      security: []
+      summary: Public service status
+      tags:
+      - Internal
+  /sso/discover:
+    get:
+      description: |
+        Given a work email, returns whether the email's domain has an active
+        enterprise SSO configuration and, if so, which protocol and whether
+        force-SSO is enabled. Used by the dashboard login page to offer a
+        "Continue with SSO" button and to hide the password field when
+        force-SSO is on. Anonymous access; returns `{ "hasSso": false }` for
+        unknown domains so it does not double as an account-existence oracle.
+      operationId: DiscoverSso
+      parameters:
+      - explode: true
+        in: query
+        name: email
+        required: true
+        schema:
+          format: email
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscoverSso_200_response'
+          description: Discovery result.
+      security: []
+      summary: Discover the SSO configuration for an email address's domain
+      tags:
+      - Internal
+components:
+  parameters:
+    ResourceId:
+      explode: false
+      in: path
+      name: id
+      required: true
+      schema:
+        format: uuid
+        type: string
+      style: simple
+    WorkflowKey:
+      description: "Workflow key — lowercase alphanumeric + underscore, max 100 chars."
+      explode: false
+      in: path
+      name: key
+      required: true
+      schema:
+        pattern: "^[a-z][a-z0-9_]{0,99}$"
+        type: string
+      style: simple
+    IdempotencyKey:
+      description: |
+        Client-generated key (UUID recommended). Repeat requests with the same
+        key within 24 hours return the original response without re-sending.
+      explode: false
+      in: header
+      name: Idempotency-Key
+      required: false
+      schema:
+        type: string
+      style: simple
+  responses:
+    BadRequest:
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+      description: Validation or request error.
+    Unauthorized:
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+      description: Missing or invalid credentials.
+    Forbidden:
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+      description: Credentials do not have the required scope.
+    NotFound:
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+      description: Resource not found.
+    Conflict:
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+      description: "Conflict (e.g. duplicate key, idempotency collision)."
+  schemas:
+    NotificationChannel:
+      description: Notification channel identifier.
+      enum:
+      - email
+      - in_app
+      - webhook
+      - sms
+      - slack
+      - teams
+      - discord
+      type: string
+    NotificationChannelKebab:
+      description: Kebab-case channel identifier used in URL path segments and template
+        body keys.
+      enum:
+      - email
+      - in_app
+      - sms
+      - slack
+      - teams
+      - discord
+      type: string
+    NotificationStatus:
+      enum:
+      - queued
+      - sending
+      - sent
+      - failed
+      - suppressed
+      - delivered
+      - bounced
+      - complained
+      type: string
+    UsageResponse:
+      description: Current-period live usage and resolved plan limits.
+      example:
+        period_end: 2000-01-23T04:56:07.000+00:00
+        remaining_sends: 1
+        period_start: 2000-01-23T04:56:07.000+00:00
+        by_channel:
+          key: 5
+        plan: plan
+        included_sends: 0
+        used_sends: 6
+        hard_limit: true
+      properties:
+        plan:
+          description: "Resolved plan key (e.g. `free`, `oem`)."
+          type: string
+        period_start:
+          description: Inclusive UTC start of the current billing period (first of
+            the month).
+          format: date-time
+          type: string
+        period_end:
+          description: Exclusive UTC end of the current billing period (first of the
+            next month).
+          format: date-time
+          type: string
+        included_sends:
+          description: "Monthly included send allowance, or null for unmetered plans."
+          format: int64
+          type: integer
+          nullable: true
+        used_sends:
+          description: Live (non-test) sends consumed in the current period.
+          format: int64
+          type: integer
+        remaining_sends:
+          description: "Sends remaining before the cap, or null when there is no cap."
+          format: int64
+          type: integer
+          nullable: true
+        hard_limit:
+          description: "When true, sends are rejected once the included allowance\
+            \ is exhausted."
+          type: boolean
+        by_channel:
+          additionalProperties:
+            format: int64
+            type: integer
+          description: "Live sends consumed in the current period, keyed by lowercase\
+            \ channel name."
+      required:
+      - by_channel
+      - hard_limit
+      - period_end
+      - period_start
+      - plan
+      - used_sends
+    ErrorBody:
+      example:
+        code: code
+        param: param
+        type: type
+        message: message
+      properties:
+        type:
+          type: string
+        code:
+          type: string
+        message:
+          type: string
+        param:
+          type: string
+          nullable: true
+      required:
+      - code
+      - message
+      - type
+    ErrorEnvelope:
+      example:
+        error:
+          code: code
+          param: param
+          type: type
+          message: message
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorBody'
+      required:
+      - error
+    SendTestResponse:
+      example:
+        notification_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+      properties:
+        notification_id:
+          format: uuid
+          type: string
+      required:
+      - notification_id
+    Recipient:
+      description: |
+        Identifies the notification target. At most one typed field should be
+        set; the server selects the correct field based on `channel`.
+
+        - **Email / SMS / In-app:** use `address` (email address, phone number E.164, or opaque external user id).
+        - **Slack:** use `slack_user_id` (for DMs) or `slack_channel_id` (for channel posts).
+        - **Teams / Discord:** use `endpoint` (the endpoint **key**, e.g. `"billing-alerts"`) or the legacy
+          `teams_endpoint_id` / `discord_endpoint_id` (UUID of the configured endpoint).
+        - `external_user_id` resolves the recipient via stored preference/inbox records.
+        - `name` is used only for email `To:` display name and in-app display.
+      example:
+        teams_endpoint_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        slack_user_id: slack_user_id
+        endpoint: endpoint
+        address: address
+        slack_channel_id: slack_channel_id
+        name: name
+        discord_endpoint_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        external_user_id: external_user_id
+      properties:
+        address:
+          type: string
+          nullable: true
+        name:
+          type: string
+          nullable: true
+        external_user_id:
+          type: string
+          nullable: true
+        endpoint:
+          description: |
+            The **key** of a Discord or Teams endpoint (e.g. `"billing-alerts"`). Preferred over the legacy
+            UUID fields. When set, `teams_endpoint_id` / `discord_endpoint_id` are ignored.
+          type: string
+          nullable: true
+        slack_user_id:
+          description: Slack user id (Uxxxxxxxx) for DM delivery. Mutually exclusive
+            with `slack_channel_id`.
+          type: string
+          nullable: true
+        slack_channel_id:
+          description: Slack channel id (Cxxxxxxxx) for channel-post delivery. Mutually
+            exclusive with `slack_user_id`.
+          type: string
+          nullable: true
+        teams_endpoint_id:
+          description: UUID of the `TeamsWebhookEndpoint` to send to. Legacy — prefer
+            `endpoint` (the key).
+          format: uuid
+          type: string
+          nullable: true
+        discord_endpoint_id:
+          description: UUID of the `DiscordWebhookEndpoint` to send to. Legacy — prefer
+            `endpoint` (the key).
+          format: uuid
+          type: string
+          nullable: true
+    SendNotificationRequest:
+      example:
+        action_url: action_url
+        template_key: template_key
+        template_data:
+          key: ""
+        attachments:
+        - filename: filename
+          content_type: content_type
+          content_base64: content_base64
+        - filename: filename
+          content_type: content_type
+          content_base64: content_base64
+        subject: subject
+        html_body: html_body
+        channel: email
+        recipient:
+          teams_endpoint_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          slack_user_id: slack_user_id
+          endpoint: endpoint
+          address: address
+          slack_channel_id: slack_channel_id
+          name: name
+          discord_endpoint_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          external_user_id: external_user_id
+        text_body: text_body
+        category: category
+      properties:
+        channel:
+          $ref: '#/components/schemas/NotificationChannel'
+        recipient:
+          $ref: '#/components/schemas/Recipient'
+        subject:
+          description: Email subject line. Ignored for non-email channels.
+          type: string
+          nullable: true
+        html_body:
+          description: Inline HTML body. Ignored when `template_key` is set. Email/in-app
+            only.
+          type: string
+          nullable: true
+        text_body:
+          description: Inline plain-text body. Email/SMS only.
+          type: string
+          nullable: true
+        template_key:
+          description: "Key of a stored template. Required for Slack, Teams, Discord\
+            \ channels."
+          type: string
+          nullable: true
+        template_data:
+          additionalProperties: true
+          description: Liquid template variables merged at render time.
+          type: object
+          nullable: true
+        action_url:
+          description: Optional CTA URL surfaced in in-app notifications.
+          type: string
+          nullable: true
+        category:
+          description: Preference category key. Suppresses the send when the recipient
+            has opted out.
+          type: string
+          nullable: true
+        attachments:
+          description: |
+            File attachments for email notifications (email channel only).
+            Maximum 10 files; maximum 15 MB per file and 15 MB total.
+            File content must be base64-encoded. Bytes are stored ephemerally and
+            deleted after delivery — only metadata is retained in the audit log.
+          items:
+            $ref: '#/components/schemas/AttachmentInput'
+          type: array
+          nullable: true
+      required:
+      - channel
+      - recipient
+    AttachmentInput:
+      example:
+        filename: filename
+        content_type: content_type
+        content_base64: content_base64
+      properties:
+        filename:
+          description: "File name shown to the recipient, e.g. `\"statement.pdf\"\
+            `."
+          maxLength: 255
+          type: string
+        content_type:
+          description: "MIME type of the file, e.g. `\"application/pdf\"`."
+          maxLength: 255
+          type: string
+        content_base64:
+          description: Base64-encoded file content.
+          type: string
+      required:
+      - content_base64
+      - content_type
+      - filename
+    AttachmentMetadata:
+      example:
+        filename: filename
+        size_bytes: 6
+        content_type: content_type
+        purged: true
+      properties:
+        filename:
+          description: Original file name.
+          type: string
+        content_type:
+          description: MIME type of the file.
+          type: string
+        size_bytes:
+          description: File size in bytes.
+          format: int64
+          type: integer
+        purged:
+          description: |
+            True when the attachment bytes have been deleted from ephemeral storage after delivery.
+            The metadata fields (filename, content_type, size_bytes) are always retained.
+          type: boolean
+    NotificationEventDto:
+      example:
+        occurred_at: 2000-01-23T04:56:07.000+00:00
+        detail: detail
+        type: type
+      properties:
+        type:
+          type: string
+        occurred_at:
+          format: date-time
+          type: string
+        detail:
+          type: string
+          nullable: true
+    NotificationResponse:
+      example:
+        action_url: action_url
+        attempt_count: 0
+        template_key: template_key
+        attachments:
+        - filename: filename
+          size_bytes: 6
+          content_type: content_type
+          purged: true
+        - filename: filename
+          size_bytes: 6
+          content_type: content_type
+          purged: true
+        subject: subject
+        html_body: html_body
+        channel: email
+        created_at: 2000-01-23T04:56:07.000+00:00
+        text_body: text_body
+        suppression_reason: suppression_reason
+        template_data:
+          key: ""
+        recipient:
+          address: address
+          name: name
+        idempotency_key: idempotency_key
+        id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        events:
+        - occurred_at: 2000-01-23T04:56:07.000+00:00
+          detail: detail
+          type: type
+        - occurred_at: 2000-01-23T04:56:07.000+00:00
+          detail: detail
+          type: type
+        status: queued
+      properties:
+        id:
+          format: uuid
+          type: string
+        status:
+          $ref: '#/components/schemas/NotificationStatus'
+        channel:
+          $ref: '#/components/schemas/NotificationChannel'
+        recipient:
+          $ref: '#/components/schemas/NotificationResponse_recipient'
+        subject:
+          type: string
+          nullable: true
+        html_body:
+          type: string
+          nullable: true
+        text_body:
+          type: string
+          nullable: true
+        template_key:
+          type: string
+          nullable: true
+        template_data:
+          additionalProperties: true
+          type: object
+          nullable: true
+        idempotency_key:
+          type: string
+          nullable: true
+        action_url:
+          type: string
+          nullable: true
+        attempt_count:
+          type: integer
+        created_at:
+          format: date-time
+          type: string
+        events:
+          items:
+            $ref: '#/components/schemas/NotificationEventDto'
+          type: array
+        suppression_reason:
+          type: string
+          nullable: true
+        attachments:
+          description: |
+            Metadata for files that were attached to this email notification.
+            Bytes are purged after delivery; the `purged` flag indicates whether
+            this has occurred. Omitted when the notification had no attachments.
+          items:
+            $ref: '#/components/schemas/AttachmentMetadata'
+          type: array
+    NotificationPage:
+      example:
+        next_cursor: next_cursor
+        data:
+        - action_url: action_url
+          attempt_count: 0
+          template_key: template_key
+          attachments:
+          - filename: filename
+            size_bytes: 6
+            content_type: content_type
+            purged: true
+          - filename: filename
+            size_bytes: 6
+            content_type: content_type
+            purged: true
+          subject: subject
+          html_body: html_body
+          channel: email
+          created_at: 2000-01-23T04:56:07.000+00:00
+          text_body: text_body
+          suppression_reason: suppression_reason
+          template_data:
+            key: ""
+          recipient:
+            address: address
+            name: name
+          idempotency_key: idempotency_key
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          events:
+          - occurred_at: 2000-01-23T04:56:07.000+00:00
+            detail: detail
+            type: type
+          - occurred_at: 2000-01-23T04:56:07.000+00:00
+            detail: detail
+            type: type
+          status: queued
+        - action_url: action_url
+          attempt_count: 0
+          template_key: template_key
+          attachments:
+          - filename: filename
+            size_bytes: 6
+            content_type: content_type
+            purged: true
+          - filename: filename
+            size_bytes: 6
+            content_type: content_type
+            purged: true
+          subject: subject
+          html_body: html_body
+          channel: email
+          created_at: 2000-01-23T04:56:07.000+00:00
+          text_body: text_body
+          suppression_reason: suppression_reason
+          template_data:
+            key: ""
+          recipient:
+            address: address
+            name: name
+          idempotency_key: idempotency_key
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          events:
+          - occurred_at: 2000-01-23T04:56:07.000+00:00
+            detail: detail
+            type: type
+          - occurred_at: 2000-01-23T04:56:07.000+00:00
+            detail: detail
+            type: type
+          status: queued
+      properties:
+        data:
+          items:
+            $ref: '#/components/schemas/NotificationResponse'
+          type: array
+        next_cursor:
+          type: string
+          nullable: true
+    AddSuppressionRequest:
+      example:
+        address: address
+      properties:
+        address:
+          type: string
+      required:
+      - address
+    SuppressionResponse:
+      example:
+        reason: hard_bounce
+        address: address
+        triggering_notification_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        suppressed_at: 2000-01-23T04:56:07.000+00:00
+        id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        source: provider
+        diagnostic_detail: diagnostic_detail
+      properties:
+        id:
+          format: uuid
+          type: string
+        address:
+          type: string
+        reason:
+          enum:
+          - hard_bounce
+          - complaint
+          - manual_add
+          type: string
+        source:
+          enum:
+          - provider
+          - manual
+          type: string
+        diagnostic_detail:
+          type: string
+          nullable: true
+        triggering_notification_id:
+          format: uuid
+          type: string
+          nullable: true
+        suppressed_at:
+          format: date-time
+          type: string
+    SuppressionPage:
+      example:
+        next_cursor: next_cursor
+        data:
+        - reason: hard_bounce
+          address: address
+          triggering_notification_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          suppressed_at: 2000-01-23T04:56:07.000+00:00
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          source: provider
+          diagnostic_detail: diagnostic_detail
+        - reason: hard_bounce
+          address: address
+          triggering_notification_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          suppressed_at: 2000-01-23T04:56:07.000+00:00
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          source: provider
+          diagnostic_detail: diagnostic_detail
+        has_more: true
+      properties:
+        data:
+          items:
+            $ref: '#/components/schemas/SuppressionResponse'
+          type: array
+        has_more:
+          type: boolean
+        next_cursor:
+          type: string
+          nullable: true
+    CreateTemplateRequest:
+      example:
+        html_body_template: html_body_template
+        text_body_template: text_body_template
+        name: name
+        subject_template: subject_template
+        key: key
+      properties:
+        key:
+          type: string
+        name:
+          type: string
+        subject_template:
+          type: string
+        html_body_template:
+          type: string
+        text_body_template:
+          type: string
+          nullable: true
+      required:
+      - html_body_template
+      - key
+      - name
+      - subject_template
+    UpdateTemplateRequest:
+      example:
+        html_body_template: html_body_template
+        text_body_template: text_body_template
+        name: name
+        subject_template: subject_template
+      properties:
+        name:
+          type: string
+          nullable: true
+        subject_template:
+          type: string
+          nullable: true
+        html_body_template:
+          type: string
+          nullable: true
+        text_body_template:
+          type: string
+          nullable: true
+    TemplateChannelBodyResponse:
+      description: |
+        Per-channel body variant for a template. The channel-specific fields
+        that apply depend on the channel:
+        - **Email:** `subject_template` + `html_template` (+ optional `text_template`)
+        - **InApp:** `html_template` (or `text_template` for plain-text in-app)
+        - **SMS:** `text_template`
+        - **Slack:** `structured_template` (Block Kit JSON as Liquid template)
+        - **Teams:** `structured_template` (Adaptive Card v1.5 JSON as Liquid template)
+        - **Discord:** `text_template` (content) and/or `structured_template` (embed JSON)
+      example:
+        channel: email
+        subject_template: subject_template
+        html_template: html_template
+        text_template: text_template
+        structured_template: structured_template
+      properties:
+        channel:
+          $ref: '#/components/schemas/NotificationChannel'
+        subject_template:
+          type: string
+          nullable: true
+        text_template:
+          type: string
+          nullable: true
+        html_template:
+          type: string
+          nullable: true
+        structured_template:
+          type: string
+          nullable: true
+    TemplateResponse:
+      example:
+        html_body_template: html_body_template
+        text_body_template: text_body_template
+        updated_at: 2000-01-23T04:56:07.000+00:00
+        bodies:
+        - channel: email
+          subject_template: subject_template
+          html_template: html_template
+          text_template: text_template
+          structured_template: structured_template
+        - channel: email
+          subject_template: subject_template
+          html_template: html_template
+          text_template: text_template
+          structured_template: structured_template
+        name: name
+        subject_template: subject_template
+        created_at: 2000-01-23T04:56:07.000+00:00
+        body_channels:
+        - email
+        - email
+        id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        key: key
+      properties:
+        id:
+          format: uuid
+          type: string
+        key:
+          type: string
+        name:
+          type: string
+        subject_template:
+          description: Populated from the Email channel body for backwards compatibility.
+          type: string
+          nullable: true
+        html_body_template:
+          description: Populated from the Email channel body for backwards compatibility.
+          type: string
+          nullable: true
+        text_body_template:
+          description: Populated from the Email/SMS channel body for backwards compatibility.
+          type: string
+          nullable: true
+        created_at:
+          format: date-time
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+        bodies:
+          description: Per-channel body variants. Replaces the legacy flat fields
+            for new integrations.
+          items:
+            $ref: '#/components/schemas/TemplateChannelBodyResponse'
+          type: array
+        body_channels:
+          description: Kebab-case list of channels for which a body variant exists.
+          items:
+            $ref: '#/components/schemas/NotificationChannelKebab'
+          type: array
+    TemplatePage:
+      example:
+        next_cursor: next_cursor
+        data:
+        - html_body_template: html_body_template
+          text_body_template: text_body_template
+          updated_at: 2000-01-23T04:56:07.000+00:00
+          bodies:
+          - channel: email
+            subject_template: subject_template
+            html_template: html_template
+            text_template: text_template
+            structured_template: structured_template
+          - channel: email
+            subject_template: subject_template
+            html_template: html_template
+            text_template: text_template
+            structured_template: structured_template
+          name: name
+          subject_template: subject_template
+          created_at: 2000-01-23T04:56:07.000+00:00
+          body_channels:
+          - email
+          - email
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          key: key
+        - html_body_template: html_body_template
+          text_body_template: text_body_template
+          updated_at: 2000-01-23T04:56:07.000+00:00
+          bodies:
+          - channel: email
+            subject_template: subject_template
+            html_template: html_template
+            text_template: text_template
+            structured_template: structured_template
+          - channel: email
+            subject_template: subject_template
+            html_template: html_template
+            text_template: text_template
+            structured_template: structured_template
+          name: name
+          subject_template: subject_template
+          created_at: 2000-01-23T04:56:07.000+00:00
+          body_channels:
+          - email
+          - email
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          key: key
+      properties:
+        data:
+          items:
+            $ref: '#/components/schemas/TemplateResponse'
+          type: array
+        next_cursor:
+          type: string
+          nullable: true
+    PutTemplateBodyRequest:
+      description: |
+        Provide the fields relevant to the target channel. Fields not applicable
+        to the channel are ignored.
+      example:
+        subject_template: subject_template
+        html_template: html_template
+        text_template: text_template
+        structured_template: structured_template
+      properties:
+        subject_template:
+          type: string
+          nullable: true
+        text_template:
+          type: string
+          nullable: true
+        html_template:
+          type: string
+          nullable: true
+        structured_template:
+          description: |
+            JSON string containing the channel-specific structured body. For Slack
+            this is a Block Kit blocks array rendered via Liquid. For Teams this is
+            an Adaptive Card v1.5 object rendered via Liquid. For Discord this is an
+            embed object rendered via Liquid.
+          type: string
+          nullable: true
+    RenderTemplateResponse:
+      example:
+        subject: subject
+        html_body: html_body
+        text_body: text_body
+      properties:
+        subject:
+          type: string
+        html_body:
+          type: string
+        text_body:
+          type: string
+          nullable: true
+    VerifyTokenResponse:
+      example:
+        environment_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        organization_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        external_user_id: external_user_id
+      properties:
+        external_user_id:
+          type: string
+        organization_id:
+          format: uuid
+          type: string
+        environment_id:
+          format: uuid
+          type: string
+    InboxItemResponse:
+      example:
+        action_url: action_url
+        is_read: true
+        subject: subject
+        html_body: html_body
+        created_at: 2000-01-23T04:56:07.000+00:00
+        read_at: 2000-01-23T04:56:07.000+00:00
+        id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        text_body: text_body
+      properties:
+        id:
+          format: uuid
+          type: string
+        subject:
+          type: string
+          nullable: true
+        html_body:
+          type: string
+          nullable: true
+        text_body:
+          type: string
+          nullable: true
+        action_url:
+          type: string
+          nullable: true
+        is_read:
+          type: boolean
+        created_at:
+          format: date-time
+          type: string
+        read_at:
+          format: date-time
+          type: string
+          nullable: true
+    InboxFeedPage:
+      example:
+        unread_count: 0
+        next_cursor: next_cursor
+        data:
+        - action_url: action_url
+          is_read: true
+          subject: subject
+          html_body: html_body
+          created_at: 2000-01-23T04:56:07.000+00:00
+          read_at: 2000-01-23T04:56:07.000+00:00
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          text_body: text_body
+        - action_url: action_url
+          is_read: true
+          subject: subject
+          html_body: html_body
+          created_at: 2000-01-23T04:56:07.000+00:00
+          read_at: 2000-01-23T04:56:07.000+00:00
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          text_body: text_body
+      properties:
+        data:
+          items:
+            $ref: '#/components/schemas/InboxItemResponse'
+          type: array
+        next_cursor:
+          type: string
+          nullable: true
+        unread_count:
+          type: integer
+    MarkReadResponse:
+      example:
+        is_read: true
+        read_at: 2000-01-23T04:56:07.000+00:00
+        id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+      properties:
+        id:
+          format: uuid
+          type: string
+        is_read:
+          type: boolean
+        read_at:
+          format: date-time
+          type: string
+          nullable: true
+    MarkAllReadResponse:
+      example:
+        marked_count: 0
+      properties:
+        marked_count:
+          type: integer
+    UnreadCountResponse:
+      example:
+        unread_count: 0
+      properties:
+        unread_count:
+          type: integer
+    CategoryResponse:
+      example:
+        is_archived: true
+        default_channels:
+        - email
+        - email
+        name: name
+        description: description
+        default_opt_in: true
+        id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        key: key
+        is_critical: true
+      properties:
+        id:
+          format: uuid
+          type: string
+        key:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        is_critical:
+          type: boolean
+        default_channels:
+          items:
+            $ref: '#/components/schemas/NotificationChannel'
+          type: array
+        default_opt_in:
+          type: boolean
+        is_archived:
+          type: boolean
+    CategoryListResponse:
+      example:
+        data:
+        - is_archived: true
+          default_channels:
+          - email
+          - email
+          name: name
+          description: description
+          default_opt_in: true
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          key: key
+          is_critical: true
+        - is_archived: true
+          default_channels:
+          - email
+          - email
+          name: name
+          description: description
+          default_opt_in: true
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          key: key
+          is_critical: true
+      properties:
+        data:
+          items:
+            $ref: '#/components/schemas/CategoryResponse'
+          type: array
+    CreateCategoryRequest:
+      example:
+        default_channels:
+        - email
+        - email
+        name: name
+        description: description
+        default_opt_in: true
+        key: key
+        is_critical: false
+      properties:
+        key:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        is_critical:
+          default: false
+          type: boolean
+        default_channels:
+          items:
+            $ref: '#/components/schemas/NotificationChannel'
+          type: array
+        default_opt_in:
+          default: true
+          type: boolean
+      required:
+      - default_channels
+      - key
+      - name
+    UpdateCategoryRequest:
+      example:
+        default_channels:
+        - email
+        - email
+        name: name
+        description: description
+        default_opt_in: true
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        default_channels:
+          items:
+            $ref: '#/components/schemas/NotificationChannel'
+          type: array
+        default_opt_in:
+          type: boolean
+      required:
+      - default_channels
+      - default_opt_in
+      - name
+    UserPreferencesResponse:
+      example:
+        data:
+        - category_key: category_key
+          channel: email
+          opted_in: true
+        - category_key: category_key
+          channel: email
+          opted_in: true
+      properties:
+        data:
+          items:
+            $ref: '#/components/schemas/UserPreferencesResponse_data_inner'
+          type: array
+    BulkSetUserPreferencesRequest:
+      example:
+        preferences:
+        - category_key: category_key
+          channel: email
+          opted_in: true
+        - category_key: category_key
+          channel: email
+          opted_in: true
+      properties:
+        preferences:
+          items:
+            $ref: '#/components/schemas/BulkSetUserPreferencesRequest_preferences_inner'
+          type: array
+      required:
+      - preferences
+    WebhookEndpointResponse:
+      example:
+        signing_secret_prefix: signing_secret_prefix
+        event_filters:
+        - event_filters
+        - event_filters
+        description: description
+        created_at: 2000-01-23T04:56:07.000+00:00
+        id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        timeout_seconds: 0
+        url: url
+        status: active
+      properties:
+        id:
+          format: uuid
+          type: string
+        url:
+          type: string
+        status:
+          enum:
+          - active
+          - paused
+          - auto_disabled
+          type: string
+        event_filters:
+          items:
+            type: string
+          type: array
+        description:
+          type: string
+          nullable: true
+        timeout_seconds:
+          type: integer
+        signing_secret_prefix:
+          description: First 8 characters of the signing secret for recognition only
+            — full secret shown only at creation/rotation.
+          type: string
+        created_at:
+          format: date-time
+          type: string
+    WebhookEndpointListResponse:
+      example:
+        data:
+        - signing_secret_prefix: signing_secret_prefix
+          event_filters:
+          - event_filters
+          - event_filters
+          description: description
+          created_at: 2000-01-23T04:56:07.000+00:00
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          timeout_seconds: 0
+          url: url
+          status: active
+        - signing_secret_prefix: signing_secret_prefix
+          event_filters:
+          - event_filters
+          - event_filters
+          description: description
+          created_at: 2000-01-23T04:56:07.000+00:00
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          timeout_seconds: 0
+          url: url
+          status: active
+      properties:
+        data:
+          items:
+            $ref: '#/components/schemas/WebhookEndpointResponse'
+          type: array
+    CreateWebhookEndpointRequest:
+      example:
+        event_filters:
+        - event_filters
+        - event_filters
+        description: description
+        timeout_seconds: 3
+        url: https://openapi-generator.tech
+      properties:
+        url:
+          format: uri
+          type: string
+        event_filters:
+          description: List of event types to deliver (empty means all events).
+          items:
+            type: string
+          type: array
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        timeout_seconds:
+          maximum: 30
+          minimum: 1
+          type: integer
+          nullable: true
+      required:
+      - url
+    UpdateWebhookEndpointRequest:
+      example:
+        event_filters:
+        - event_filters
+        - event_filters
+        description: description
+        timeout_seconds: 0
+        url: https://openapi-generator.tech
+        status: active
+      properties:
+        url:
+          format: uri
+          type: string
+          nullable: true
+        event_filters:
+          items:
+            type: string
+          type: array
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        timeout_seconds:
+          type: integer
+          nullable: true
+        status:
+          enum:
+          - active
+          - paused
+          type: string
+          nullable: true
+    WebhookDeliveryResponse:
+      example:
+        attempt_count: 1
+        event_type: event_type
+        next_attempt_at: 2000-01-23T04:56:07.000+00:00
+        http_status_code: 0
+        endpoint_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        created_at: 2000-01-23T04:56:07.000+00:00
+        id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        status: pending
+        response_snippet: response_snippet
+        latency_ms: 6
+      properties:
+        id:
+          format: uuid
+          type: string
+        endpoint_id:
+          format: uuid
+          type: string
+        event_type:
+          type: string
+        status:
+          enum:
+          - pending
+          - in_flight
+          - succeeded
+          - permanent_failure
+          - failed
+          type: string
+        http_status_code:
+          type: integer
+          nullable: true
+        response_snippet:
+          type: string
+          nullable: true
+        latency_ms:
+          type: integer
+          nullable: true
+        attempt_count:
+          type: integer
+        next_attempt_at:
+          format: date-time
+          type: string
+          nullable: true
+        created_at:
+          format: date-time
+          type: string
+    WebhookDeliveryListResponse:
+      example:
+        next_cursor: next_cursor
+        data:
+        - attempt_count: 1
+          event_type: event_type
+          next_attempt_at: 2000-01-23T04:56:07.000+00:00
+          http_status_code: 0
+          endpoint_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          created_at: 2000-01-23T04:56:07.000+00:00
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          status: pending
+          response_snippet: response_snippet
+          latency_ms: 6
+        - attempt_count: 1
+          event_type: event_type
+          next_attempt_at: 2000-01-23T04:56:07.000+00:00
+          http_status_code: 0
+          endpoint_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          created_at: 2000-01-23T04:56:07.000+00:00
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          status: pending
+          response_snippet: response_snippet
+          latency_ms: 6
+      properties:
+        data:
+          items:
+            $ref: '#/components/schemas/WebhookDeliveryResponse'
+          type: array
+        next_cursor:
+          type: string
+          nullable: true
+    SmsSettingsResponse:
+      example:
+        kind: Managed
+        from_number: from_number
+        from_sender_id: from_sender_id
+        credentials_validated: true
+        id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        credentials_validated_at: 2000-01-23T04:56:07.000+00:00
+      properties:
+        id:
+          format: uuid
+          type: string
+        kind:
+          enum:
+          - Managed
+          - Twilio
+          - Vonage
+          type: string
+        from_number:
+          type: string
+          nullable: true
+        from_sender_id:
+          type: string
+          nullable: true
+        credentials_validated:
+          type: boolean
+        credentials_validated_at:
+          format: date-time
+          type: string
+          nullable: true
+    UpdateSmsSettingsRequest:
+      example:
+        twilio_auth_token: twilio_auth_token
+        kind: managed
+        from_number: from_number
+        vonage_api_key: vonage_api_key
+        twilio_account_sid: twilio_account_sid
+        vonage_api_secret: vonage_api_secret
+        from_sender_id: from_sender_id
+      properties:
+        kind:
+          enum:
+          - managed
+          - twilio
+          - vonage
+          type: string
+        from_number:
+          type: string
+          nullable: true
+        from_sender_id:
+          type: string
+          nullable: true
+        twilio_account_sid:
+          type: string
+          nullable: true
+        twilio_auth_token:
+          type: string
+          nullable: true
+        vonage_api_key:
+          type: string
+          nullable: true
+        vonage_api_secret:
+          type: string
+          nullable: true
+      required:
+      - kind
+    SlackInstallationResponse:
+      description: Represents a Slack workspace installation for an environment.
+      example:
+        bot_user_id: bot_user_id
+        installed_at: 2000-01-23T04:56:07.000+00:00
+        auto_join_public_channels: true
+        id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        team_id: team_id
+        scopes:
+        - scopes
+        - scopes
+        app_id: app_id
+        team_name: team_name
+        installed_by_user_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+      properties:
+        id:
+          format: uuid
+          type: string
+        team_id:
+          description: Slack workspace team id (Txxxxxxxxx).
+          type: string
+        team_name:
+          type: string
+        bot_user_id:
+          description: Slack bot user id (Uxxxxxxxxx).
+          type: string
+        app_id:
+          type: string
+          nullable: true
+        scopes:
+          description: OAuth scopes granted to the bot token.
+          items:
+            type: string
+          type: array
+        auto_join_public_channels:
+          description: |
+            When true the dispatcher will attempt to join a public channel
+            (id starting with `C`) if the bot is not already a member.
+          type: boolean
+        installed_at:
+          format: date-time
+          type: string
+        installed_by_user_id:
+          description: NotifyService user id who completed the OAuth flow.
+          format: uuid
+          type: string
+    SlackInstallationListResponse:
+      example:
+        data:
+        - bot_user_id: bot_user_id
+          installed_at: 2000-01-23T04:56:07.000+00:00
+          auto_join_public_channels: true
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          team_id: team_id
+          scopes:
+          - scopes
+          - scopes
+          app_id: app_id
+          team_name: team_name
+          installed_by_user_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        - bot_user_id: bot_user_id
+          installed_at: 2000-01-23T04:56:07.000+00:00
+          auto_join_public_channels: true
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          team_id: team_id
+          scopes:
+          - scopes
+          - scopes
+          app_id: app_id
+          team_name: team_name
+          installed_by_user_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+      properties:
+        data:
+          items:
+            $ref: '#/components/schemas/SlackInstallationResponse'
+          type: array
+    UpdateSlackInstallationRequest:
+      example:
+        auto_join_public_channels: true
+      properties:
+        auto_join_public_channels:
+          type: boolean
+      required:
+      - auto_join_public_channels
+    SendSlackTestRequest:
+      description: At least one of `slack_user_id` or `slack_channel_id` must be provided.
+      example:
+        slack_user_id: slack_user_id
+        slack_channel_id: slack_channel_id
+      properties:
+        slack_user_id:
+          description: Deliver as a DM to this Slack user id.
+          type: string
+          nullable: true
+        slack_channel_id:
+          description: Post to this Slack channel id.
+          type: string
+          nullable: true
+    TeamsEndpointResponse:
+      description: Microsoft Teams webhook endpoint configuration.
+      example:
+        last_success_at: 2000-01-23T04:56:07.000+00:00
+        flavour: flavour
+        created_at: 2000-01-23T04:56:07.000+00:00
+        id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        label: label
+        last_failure_at: 2000-01-23T04:56:07.000+00:00
+        last_failure_reason: last_failure_reason
+        webhook_url_prefix: webhook_url_prefix
+      properties:
+        id:
+          format: uuid
+          type: string
+        label:
+          type: string
+        webhook_url_prefix:
+          description: First 30 characters of the webhook URL for recognition only
+            — full URL never returned.
+          type: string
+        flavour:
+          description: |
+            Detected webhook flavour: `WorkflowsLogicApps`, `WorkflowsOffice`, or `LegacyConnector`.
+          type: string
+        last_success_at:
+          format: date-time
+          type: string
+          nullable: true
+        last_failure_at:
+          format: date-time
+          type: string
+          nullable: true
+        last_failure_reason:
+          type: string
+          nullable: true
+        created_at:
+          format: date-time
+          type: string
+    TeamsEndpointListResponse:
+      example:
+        data:
+        - last_success_at: 2000-01-23T04:56:07.000+00:00
+          flavour: flavour
+          created_at: 2000-01-23T04:56:07.000+00:00
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          label: label
+          last_failure_at: 2000-01-23T04:56:07.000+00:00
+          last_failure_reason: last_failure_reason
+          webhook_url_prefix: webhook_url_prefix
+        - last_success_at: 2000-01-23T04:56:07.000+00:00
+          flavour: flavour
+          created_at: 2000-01-23T04:56:07.000+00:00
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          label: label
+          last_failure_at: 2000-01-23T04:56:07.000+00:00
+          last_failure_reason: last_failure_reason
+          webhook_url_prefix: webhook_url_prefix
+      properties:
+        data:
+          items:
+            $ref: '#/components/schemas/TeamsEndpointResponse'
+          type: array
+    CreateTeamsEndpointRequest:
+      example:
+        webhook_url: https://openapi-generator.tech
+        label: label
+      properties:
+        label:
+          description: Human-readable label for this endpoint in the dashboard.
+          type: string
+        webhook_url:
+          description: |
+            Teams Workflows or legacy connector webhook URL. Must match one of the
+            three accepted patterns; legacy connector URLs are rejected with
+            `teams_legacy_connector_url` error code.
+          format: uri
+          type: string
+      required:
+      - label
+      - webhook_url
+    UpdateTeamsEndpointRequest:
+      example:
+        webhook_url: https://openapi-generator.tech
+        label: label
+      properties:
+        label:
+          type: string
+          nullable: true
+        webhook_url:
+          format: uri
+          type: string
+          nullable: true
+    DiscordEndpointResponse:
+      description: Discord webhook endpoint configuration.
+      example:
+        last_success_at: 2000-01-23T04:56:07.000+00:00
+        default_username: default_username
+        default_avatar_url: default_avatar_url
+        created_at: 2000-01-23T04:56:07.000+00:00
+        id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        label: label
+        last_failure_at: 2000-01-23T04:56:07.000+00:00
+        last_failure_reason: last_failure_reason
+        webhook_url_prefix: webhook_url_prefix
+      properties:
+        id:
+          format: uuid
+          type: string
+        label:
+          type: string
+        webhook_url_prefix:
+          description: First 30 characters of the webhook URL for recognition only
+            — full URL never returned.
+          type: string
+        default_username:
+          description: Default bot username shown in Discord. Overridden per-send
+            via template data.
+          type: string
+          nullable: true
+        default_avatar_url:
+          description: Default bot avatar URL. Overridden per-send via template data.
+          type: string
+          nullable: true
+        last_success_at:
+          format: date-time
+          type: string
+          nullable: true
+        last_failure_at:
+          format: date-time
+          type: string
+          nullable: true
+        last_failure_reason:
+          type: string
+          nullable: true
+        created_at:
+          format: date-time
+          type: string
+    DiscordEndpointListResponse:
+      example:
+        data:
+        - last_success_at: 2000-01-23T04:56:07.000+00:00
+          default_username: default_username
+          default_avatar_url: default_avatar_url
+          created_at: 2000-01-23T04:56:07.000+00:00
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          label: label
+          last_failure_at: 2000-01-23T04:56:07.000+00:00
+          last_failure_reason: last_failure_reason
+          webhook_url_prefix: webhook_url_prefix
+        - last_success_at: 2000-01-23T04:56:07.000+00:00
+          default_username: default_username
+          default_avatar_url: default_avatar_url
+          created_at: 2000-01-23T04:56:07.000+00:00
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          label: label
+          last_failure_at: 2000-01-23T04:56:07.000+00:00
+          last_failure_reason: last_failure_reason
+          webhook_url_prefix: webhook_url_prefix
+      properties:
+        data:
+          items:
+            $ref: '#/components/schemas/DiscordEndpointResponse'
+          type: array
+    CreateDiscordEndpointRequest:
+      example:
+        webhook_url: https://openapi-generator.tech
+        default_username: default_username
+        default_avatar_url: default_avatar_url
+        label: label
+      properties:
+        label:
+          type: string
+        webhook_url:
+          description: |
+            Discord webhook URL. Must match `https://discord.com/api/webhooks/{id}/{token}`
+            (also accepts `discordapp.com` alias).
+          format: uri
+          type: string
+        default_username:
+          type: string
+          nullable: true
+        default_avatar_url:
+          type: string
+          nullable: true
+      required:
+      - label
+      - webhook_url
+    UpdateDiscordEndpointRequest:
+      example:
+        webhook_url: https://openapi-generator.tech
+        default_username: default_username
+        default_avatar_url: default_avatar_url
+        label: label
+      properties:
+        label:
+          type: string
+          nullable: true
+        webhook_url:
+          format: uri
+          type: string
+          nullable: true
+        default_username:
+          type: string
+          nullable: true
+        default_avatar_url:
+          type: string
+          nullable: true
+    Workflow:
+      description: "A named, versioned, per-environment notification workflow."
+      example:
+        name: name
+        description: description
+        created_at: 2000-01-23T04:56:07.000+00:00
+        id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        key: key
+        status: draft
+      properties:
+        id:
+          format: uuid
+          type: string
+        key:
+          description: "Stable slug, unique per environment. Pattern `^[a-z][a-z0-9_]{0,99}$`."
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        status:
+          enum:
+          - draft
+          - active
+          - disabled
+          type: string
+        created_at:
+          format: date-time
+          type: string
+      required:
+      - created_at
+      - id
+      - key
+      - name
+      - status
+    WorkflowSummaryResponse:
+      example:
+        active_version: 0
+        name: name
+        created_at: 2000-01-23T04:56:07.000+00:00
+        trigger_count_7d: 6
+        id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        key: key
+        status: draft
+      properties:
+        id:
+          format: uuid
+          type: string
+        key:
+          type: string
+        name:
+          type: string
+        status:
+          enum:
+          - draft
+          - active
+          - disabled
+          type: string
+        active_version:
+          type: integer
+          nullable: true
+        trigger_count_7d:
+          format: int64
+          type: integer
+        created_at:
+          format: date-time
+          type: string
+      required:
+      - created_at
+      - id
+      - key
+      - name
+      - status
+      - trigger_count_7d
+    WorkflowDetailResponse:
+      example:
+        active_version: 0
+        name: name
+        description: description
+        active_body_json: active_body_json
+        created_at: 2000-01-23T04:56:07.000+00:00
+        id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        key: key
+        status: draft
+      properties:
+        id:
+          format: uuid
+          type: string
+        key:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        status:
+          enum:
+          - draft
+          - active
+          - disabled
+          type: string
+        active_version:
+          type: integer
+          nullable: true
+        active_body_json:
+          description: "Raw JSON body of the currently active version, or null if\
+            \ none."
+          type: string
+          nullable: true
+        created_at:
+          format: date-time
+          type: string
+      required:
+      - created_at
+      - id
+      - key
+      - name
+      - status
+    WorkflowVersion:
+      example:
+        id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        version: 0
+      properties:
+        id:
+          format: uuid
+          type: string
+        version:
+          type: integer
+      required:
+      - id
+      - version
+    WorkflowVersionSummary:
+      example:
+        activated_at: 2000-01-23T04:56:07.000+00:00
+        deactivated_at: 2000-01-23T04:56:07.000+00:00
+        created_at: 2000-01-23T04:56:07.000+00:00
+        version: 0
+      properties:
+        version:
+          type: integer
+        created_at:
+          format: date-time
+          type: string
+        activated_at:
+          format: date-time
+          type: string
+          nullable: true
+        deactivated_at:
+          format: date-time
+          type: string
+          nullable: true
+      required:
+      - created_at
+      - version
+    WorkflowVersionDetail:
+      example:
+        activated_at: 2000-01-23T04:56:07.000+00:00
+        deactivated_at: 2000-01-23T04:56:07.000+00:00
+        created_at: 2000-01-23T04:56:07.000+00:00
+        version: 0
+        body_json: body_json
+      properties:
+        version:
+          type: integer
+        body_json:
+          description: Raw JSON DSL body of this version.
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        activated_at:
+          format: date-time
+          type: string
+          nullable: true
+        deactivated_at:
+          format: date-time
+          type: string
+          nullable: true
+      required:
+      - body_json
+      - created_at
+      - version
+    CreateWorkflowRequest:
+      example:
+        name: name
+        description: description
+        key: key
+      properties:
+        key:
+          pattern: "^[a-z][a-z0-9_]{0,99}$"
+          type: string
+        name:
+          maxLength: 200
+          type: string
+        description:
+          maxLength: 500
+          type: string
+          nullable: true
+      required:
+      - key
+      - name
+    CreateWorkflowVersionRequest:
+      example:
+        body_json: body_json
+      properties:
+        body_json:
+          description: |
+            Full workflow definition JSON. Must conform to the workflow DSL
+            schema (fetch from `GET /workflows/schema.json`). The server
+            runs the structural parser at creation time; semantic validation
+            (category existence, template bodies, expression syntax) runs
+            only at activation.
+          type: string
+      required:
+      - body_json
+    ActivateWorkflowVersionResponse:
+      example:
+        valid: true
+        errors:
+        - pointer: pointer
+          code: code
+          message: message
+        - pointer: pointer
+          code: code
+          message: message
+      properties:
+        valid:
+          type: boolean
+        errors:
+          items:
+            $ref: '#/components/schemas/WorkflowValidationError'
+          type: array
+      required:
+      - errors
+      - valid
+    WorkflowValidationError:
+      example:
+        pointer: pointer
+        code: code
+        message: message
+      properties:
+        code:
+          description: |
+            Machine-readable error code. Known codes: `unknown_category`,
+            `template_body_missing`, `delay_requires_duration_or_until`,
+            `delay_duration_xor_until`, `invalid_duration`, `invalid_expression`,
+            `goto_target_not_found`, `unreachable_step`, `synchronous_cycle`,
+            `at_requires_timezone`, `unknown_timezone`, `event_required`,
+            `invalid_max_items`, `duplicate_step_id`, `unknown_channel`.
+          type: string
+        message:
+          description: Human-readable description of the error.
+          type: string
+        pointer:
+          description: JSON Pointer (RFC 6901) to the offending location in the body
+            JSON.
+          type: string
+      required:
+      - code
+      - message
+      - pointer
+    PromoteTemplateRequest:
+      example:
+        dry_run: false
+      properties:
+        dry_run:
+          default: false
+          description: "If true, return the diff without writing to Live."
+          type: boolean
+    PromoteWorkflowRequest:
+      example:
+        include_templates:
+        - include_templates
+        - include_templates
+        dry_run: false
+      properties:
+        dry_run:
+          default: false
+          description: "If true, return the diff and cascade candidates without writing\
+            \ to Live."
+          type: boolean
+        include_templates:
+          description: |
+            Keys of referenced templates to promote into Live in the same
+            transaction, before the workflow version is validated and activated.
+          items:
+            type: string
+          type: array
+    PromotionStatus:
+      description: |
+        `new` — the key does not yet exist in Live. `changed` — it exists in
+        Live and differs. `identical` — it exists and matches, so promotion is
+        a no-op.
+      enum:
+      - new
+      - changed
+      - identical
+      type: string
+    FieldChangeKind:
+      enum:
+      - added
+      - removed
+      - modified
+      - unchanged
+      type: string
+    TemplateBodyChange:
+      example:
+        subject: null
+        channel: channel
+        structured: null
+        html: null
+        text: null
+      properties:
+        channel:
+          type: string
+        subject:
+          $ref: '#/components/schemas/FieldChangeKind'
+        text:
+          $ref: '#/components/schemas/FieldChangeKind'
+        html:
+          $ref: '#/components/schemas/FieldChangeKind'
+        structured:
+          $ref: '#/components/schemas/FieldChangeKind'
+      required:
+      - channel
+      - html
+      - structured
+      - subject
+      - text
+    TemplatePromotionDiff:
+      example:
+        bodies:
+        - subject: null
+          channel: channel
+          structured: null
+          html: null
+          text: null
+        - subject: null
+          channel: channel
+          structured: null
+          html: null
+          text: null
+        name: added
+        key: key
+        status: null
+      properties:
+        key:
+          type: string
+        status:
+          $ref: '#/components/schemas/PromotionStatus'
+        name:
+          $ref: '#/components/schemas/FieldChangeKind'
+        bodies:
+          items:
+            $ref: '#/components/schemas/TemplateBodyChange'
+          type: array
+      required:
+      - bodies
+      - key
+      - name
+      - status
+    WorkflowPromotionDiff:
+      example:
+        source_version: 0
+        target_current_version: 6
+        name: null
+        description: null
+        referenced_templates:
+        - bodies:
+          - subject: null
+            channel: channel
+            structured: null
+            html: null
+            text: null
+          - subject: null
+            channel: channel
+            structured: null
+            html: null
+            text: null
+          name: added
+          key: key
+          status: null
+        - bodies:
+          - subject: null
+            channel: channel
+            structured: null
+            html: null
+            text: null
+          - subject: null
+            channel: channel
+            structured: null
+            html: null
+            text: null
+          name: added
+          key: key
+          status: null
+        body: null
+        key: key
+        status: null
+      properties:
+        key:
+          type: string
+        status:
+          $ref: '#/components/schemas/PromotionStatus'
+        name:
+          $ref: '#/components/schemas/FieldChangeKind'
+        description:
+          $ref: '#/components/schemas/FieldChangeKind'
+        body:
+          $ref: '#/components/schemas/FieldChangeKind'
+        source_version:
+          description: The active Test version number being promoted.
+          type: integer
+          nullable: true
+        target_current_version:
+          description: "The currently active Live version number, if any."
+          type: integer
+          nullable: true
+        referenced_templates:
+          description: Per-referenced-template diff against Live; the cascade candidates.
+          items:
+            $ref: '#/components/schemas/TemplatePromotionDiff'
+          type: array
+      required:
+      - body
+      - description
+      - key
+      - name
+      - referenced_templates
+      - status
+    PromotionResult:
+      example:
+        applied: true
+        template_diff:
+          bodies:
+          - subject: null
+            channel: channel
+            structured: null
+            html: null
+            text: null
+          - subject: null
+            channel: channel
+            structured: null
+            html: null
+            text: null
+          name: added
+          key: key
+          status: null
+        workflow_diff:
+          source_version: 0
+          target_current_version: 6
+          name: null
+          description: null
+          referenced_templates:
+          - bodies:
+            - subject: null
+              channel: channel
+              structured: null
+              html: null
+              text: null
+            - subject: null
+              channel: channel
+              structured: null
+              html: null
+              text: null
+            name: added
+            key: key
+            status: null
+          - bodies:
+            - subject: null
+              channel: channel
+              structured: null
+              html: null
+              text: null
+            - subject: null
+              channel: channel
+              structured: null
+              html: null
+              text: null
+            name: added
+            key: key
+            status: null
+          body: null
+          key: key
+          status: null
+        status: new
+        target_version: 1
+      properties:
+        applied:
+          description: True when the promotion was written; false for dry runs and
+            no-op (`identical`) promotions.
+          type: boolean
+        status:
+          $ref: '#/components/schemas/PromotionStatus'
+        template_diff:
+          $ref: '#/components/schemas/TemplatePromotionDiff'
+        workflow_diff:
+          $ref: '#/components/schemas/WorkflowPromotionDiff'
+        target_version:
+          description: "For workflow promotions, the new Live version number that\
+            \ was created and activated."
+          type: integer
+          nullable: true
+      required:
+      - applied
+      - status
+    WorkflowTriggerRequest:
+      example:
+        trigger_data:
+          key: ""
+      properties:
+        trigger_data:
+          additionalProperties: true
+          description: Arbitrary JSON object passed as the run's trigger payload.
+          type: object
+      required:
+      - trigger_data
+    WorkflowTriggerResponse:
+      example:
+        run_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        status: pending
+      properties:
+        run_id:
+          format: uuid
+          type: string
+        status:
+          enum:
+          - pending
+          - running
+          - waiting
+          - completed
+          - failed
+          - cancelling
+          - cancelled
+          type: string
+      required:
+      - run_id
+      - status
+    WorkflowRunResponse:
+      example:
+        current_step_id: current_step_id
+        completed_at: 2000-01-23T04:56:07.000+00:00
+        workflow_key: workflow_key
+        created_at: 2000-01-23T04:56:07.000+00:00
+        id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        source: Production
+        failure_reason: failure_reason
+        version: 0
+        steps:
+        - completed_at: 2000-01-23T04:56:07.000+00:00
+          next_step_id: next_step_id
+          kind: send
+          attempt_id: 6
+          started_at: 2000-01-23T04:56:07.000+00:00
+          notification_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          step_id: step_id
+          outcome: sent
+          output_json: output_json
+          status: running
+          next_scheduled_at: 2000-01-23T04:56:07.000+00:00
+        - completed_at: 2000-01-23T04:56:07.000+00:00
+          next_step_id: next_step_id
+          kind: send
+          attempt_id: 6
+          started_at: 2000-01-23T04:56:07.000+00:00
+          notification_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          step_id: step_id
+          outcome: sent
+          output_json: output_json
+          status: running
+          next_scheduled_at: 2000-01-23T04:56:07.000+00:00
+        trigger_data: trigger_data
+        status: pending
+      properties:
+        id:
+          format: uuid
+          type: string
+        workflow_key:
+          type: string
+        version:
+          type: integer
+        status:
+          enum:
+          - pending
+          - running
+          - waiting
+          - completed
+          - failed
+          - cancelling
+          - cancelled
+          type: string
+        current_step_id:
+          type: string
+          nullable: true
+        trigger_data:
+          description: Raw JSON string of the trigger payload.
+          type: string
+        source:
+          enum:
+          - Production
+          - Test
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        completed_at:
+          format: date-time
+          type: string
+          nullable: true
+        failure_reason:
+          type: string
+          nullable: true
+        steps:
+          items:
+            $ref: '#/components/schemas/WorkflowStepRunSummary'
+          type: array
+      required:
+      - created_at
+      - id
+      - source
+      - status
+      - steps
+      - trigger_data
+      - version
+      - workflow_key
+    WorkflowRunSummary:
+      example:
+        completed_at: 2000-01-23T04:56:07.000+00:00
+        workflow_key: workflow_key
+        created_at: 2000-01-23T04:56:07.000+00:00
+        id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        source: Production
+        status: pending
+      properties:
+        id:
+          format: uuid
+          type: string
+        workflow_key:
+          type: string
+        status:
+          enum:
+          - pending
+          - running
+          - waiting
+          - completed
+          - failed
+          - cancelling
+          - cancelled
+          type: string
+        source:
+          enum:
+          - Production
+          - Test
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        completed_at:
+          format: date-time
+          type: string
+          nullable: true
+      required:
+      - created_at
+      - id
+      - source
+      - status
+      - workflow_key
+    ListWorkflowRunsResponse:
+      example:
+        next_page_token: next_page_token
+        items:
+        - completed_at: 2000-01-23T04:56:07.000+00:00
+          workflow_key: workflow_key
+          created_at: 2000-01-23T04:56:07.000+00:00
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          source: Production
+          status: pending
+        - completed_at: 2000-01-23T04:56:07.000+00:00
+          workflow_key: workflow_key
+          created_at: 2000-01-23T04:56:07.000+00:00
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          source: Production
+          status: pending
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/WorkflowRunSummary'
+          type: array
+        next_page_token:
+          description: Opaque cursor. Pass as `page_token` query param to retrieve
+            the next page.
+          type: string
+          nullable: true
+      required:
+      - items
+    WorkflowStepRunSummary:
+      example:
+        completed_at: 2000-01-23T04:56:07.000+00:00
+        next_step_id: next_step_id
+        kind: send
+        attempt_id: 6
+        started_at: 2000-01-23T04:56:07.000+00:00
+        notification_id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        step_id: step_id
+        outcome: sent
+        output_json: output_json
+        status: running
+        next_scheduled_at: 2000-01-23T04:56:07.000+00:00
+      properties:
+        step_id:
+          type: string
+        kind:
+          enum:
+          - send
+          - delay
+          - branch
+          - digest
+          - wait_for_event
+          - cancel
+          - noop
+          type: string
+        attempt_id:
+          type: integer
+        status:
+          enum:
+          - running
+          - waiting
+          - completed
+          - failed
+          - cancelled
+          type: string
+        outcome:
+          enum:
+          - sent
+          - suppressed
+          - branched
+          - delayed
+          - event_received
+          - timed_out
+          - failed
+          - cancelled
+          - noop
+          type: string
+          nullable: true
+        notification_id:
+          format: uuid
+          type: string
+          nullable: true
+        output_json:
+          description: JSON snapshot of the step output captured at completion.
+          type: string
+          nullable: true
+        next_step_id:
+          type: string
+          nullable: true
+        next_scheduled_at:
+          format: date-time
+          type: string
+          nullable: true
+        started_at:
+          format: date-time
+          type: string
+        completed_at:
+          format: date-time
+          type: string
+          nullable: true
+      required:
+      - attempt_id
+      - kind
+      - started_at
+      - status
+      - step_id
+    PostWorkflowEventRequest:
+      example:
+        event_name: event_name
+        event_data:
+          key: ""
+      properties:
+        event_name:
+          description: Name of the event to deliver (e.g. `payment_confirmed`).
+          maxLength: 200
+          type: string
+        event_data:
+          additionalProperties: true
+          description: Arbitrary JSON payload matched against the step's `match` filter.
+          type: object
+      required:
+      - event_data
+      - event_name
+    PostWorkflowEventResponse:
+      example:
+        awoken_run_count: 0
+      properties:
+        awoken_run_count:
+          description: Number of runs that were awoken by this event.
+          type: integer
+      required:
+      - awoken_run_count
+    ServiceStatusResponse:
+      example:
+        recent_incidents:
+        - resolved_at: 2000-01-23T04:56:07.000+00:00
+          impact: minor
+          current_status: investigating
+          started_at: 2000-01-23T04:56:07.000+00:00
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          title: title
+          updates:
+          - created_at: 2000-01-23T04:56:07.000+00:00
+            body: body
+            status: investigating
+          - created_at: 2000-01-23T04:56:07.000+00:00
+            body: body
+            status: investigating
+        - resolved_at: 2000-01-23T04:56:07.000+00:00
+          impact: minor
+          current_status: investigating
+          started_at: 2000-01-23T04:56:07.000+00:00
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          title: title
+          updates:
+          - created_at: 2000-01-23T04:56:07.000+00:00
+            body: body
+            status: investigating
+          - created_at: 2000-01-23T04:56:07.000+00:00
+            body: body
+            status: investigating
+        components:
+        - name: name
+          key: key
+          status: operational
+        - name: name
+          key: key
+          status: operational
+        checked_at: 2000-01-23T04:56:07.000+00:00
+        active_incidents:
+        - resolved_at: 2000-01-23T04:56:07.000+00:00
+          impact: minor
+          current_status: investigating
+          started_at: 2000-01-23T04:56:07.000+00:00
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          title: title
+          updates:
+          - created_at: 2000-01-23T04:56:07.000+00:00
+            body: body
+            status: investigating
+          - created_at: 2000-01-23T04:56:07.000+00:00
+            body: body
+            status: investigating
+        - resolved_at: 2000-01-23T04:56:07.000+00:00
+          impact: minor
+          current_status: investigating
+          started_at: 2000-01-23T04:56:07.000+00:00
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          title: title
+          updates:
+          - created_at: 2000-01-23T04:56:07.000+00:00
+            body: body
+            status: investigating
+          - created_at: 2000-01-23T04:56:07.000+00:00
+            body: body
+            status: investigating
+        status: operational
+      properties:
+        status:
+          description: Overall service status — worst-case across all components.
+          enum:
+          - operational
+          - degraded
+          - partial_outage
+          - major_outage
+          - under_maintenance
+          type: string
+        checked_at:
+          description: UTC timestamp of when the response was generated.
+          format: date-time
+          type: string
+        components:
+          description: Per-product component statuses.
+          items:
+            $ref: '#/components/schemas/StatusComponentSummary'
+          type: array
+        active_incidents:
+          description: Currently open incidents (not yet resolved).
+          items:
+            $ref: '#/components/schemas/IncidentSummary'
+          type: array
+        recent_incidents:
+          description: Incidents resolved within the last 14 days.
+          items:
+            $ref: '#/components/schemas/IncidentSummary'
+          type: array
+      required:
+      - active_incidents
+      - checked_at
+      - components
+      - recent_incidents
+      - status
+    StatusComponentSummary:
+      example:
+        name: name
+        key: key
+        status: operational
+      properties:
+        key:
+          description: Machine identifier (e.g. `notify`).
+          type: string
+        name:
+          description: Display name (e.g. `Notify`).
+          type: string
+        status:
+          enum:
+          - operational
+          - degraded
+          - partial_outage
+          - major_outage
+          - under_maintenance
+          type: string
+      required:
+      - key
+      - name
+      - status
+    IncidentSummary:
+      example:
+        resolved_at: 2000-01-23T04:56:07.000+00:00
+        impact: minor
+        current_status: investigating
+        started_at: 2000-01-23T04:56:07.000+00:00
+        id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        title: title
+        updates:
+        - created_at: 2000-01-23T04:56:07.000+00:00
+          body: body
+          status: investigating
+        - created_at: 2000-01-23T04:56:07.000+00:00
+          body: body
+          status: investigating
+      properties:
+        id:
+          format: uuid
+          type: string
+        title:
+          type: string
+        impact:
+          enum:
+          - minor
+          - major
+          - critical
+          type: string
+        current_status:
+          enum:
+          - investigating
+          - identified
+          - monitoring
+          - resolved
+          type: string
+        started_at:
+          format: date-time
+          type: string
+        resolved_at:
+          format: date-time
+          type: string
+          nullable: true
+        updates:
+          description: Timestamped admin-authored updates in reverse-chronological
+            order.
+          items:
+            $ref: '#/components/schemas/IncidentUpdateSummary'
+          type: array
+      required:
+      - current_status
+      - id
+      - impact
+      - started_at
+      - title
+      - updates
+    IncidentUpdateSummary:
+      example:
+        created_at: 2000-01-23T04:56:07.000+00:00
+        body: body
+        status: investigating
+      properties:
+        status:
+          enum:
+          - investigating
+          - identified
+          - monitoring
+          - resolved
+          type: string
+        body:
+          description: Human-readable update text.
+          type: string
+        created_at:
+          format: date-time
+          type: string
+      required:
+      - body
+      - created_at
+      - status
+    RenderTemplate_request:
+      properties:
+        data:
+          additionalProperties: {}
+    MarkAllInboxItemsRead_request:
+      properties:
+        before:
+          description: Only mark items created before this timestamp as read.
+          format: date-time
+          type: string
+    PatchUserPreference_request:
+      properties:
+        opted_in:
+          type: boolean
+      required:
+      - opted_in
+    ListWorkflows_200_response:
+      example:
+        data:
+        - active_version: 0
+          name: name
+          created_at: 2000-01-23T04:56:07.000+00:00
+          trigger_count_7d: 6
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          key: key
+          status: draft
+        - active_version: 0
+          name: name
+          created_at: 2000-01-23T04:56:07.000+00:00
+          trigger_count_7d: 6
+          id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          key: key
+          status: draft
+      properties:
+        data:
+          items:
+            $ref: '#/components/schemas/WorkflowSummaryResponse'
+          type: array
+    ListWorkflowVersions_200_response:
+      example:
+        data:
+        - activated_at: 2000-01-23T04:56:07.000+00:00
+          deactivated_at: 2000-01-23T04:56:07.000+00:00
+          created_at: 2000-01-23T04:56:07.000+00:00
+          version: 0
+        - activated_at: 2000-01-23T04:56:07.000+00:00
+          deactivated_at: 2000-01-23T04:56:07.000+00:00
+          created_at: 2000-01-23T04:56:07.000+00:00
+          version: 0
+      properties:
+        data:
+          items:
+            $ref: '#/components/schemas/WorkflowVersionSummary'
+          type: array
+    CancelWorkflowRun_200_response:
+      example:
+        status: cancelling
+      properties:
+        status:
+          enum:
+          - cancelling
+          - cancelled
+          type: string
+    DiscoverSso_200_response:
+      example:
+        hasSso: true
+        protocol: saml
+        forceSso: true
+        orgName: orgName
+      properties:
+        hasSso:
+          type: boolean
+        protocol:
+          enum:
+          - saml
+          - oidc
+          type: string
+          nullable: true
+        orgName:
+          type: string
+          nullable: true
+        forceSso:
+          type: boolean
+      required:
+      - forceSso
+      - hasSso
+    NotificationResponse_recipient:
+      example:
+        address: address
+        name: name
+      properties:
+        address:
+          type: string
+          nullable: true
+        name:
+          type: string
+          nullable: true
+    UserPreferencesResponse_data_inner:
+      example:
+        category_key: category_key
+        channel: email
+        opted_in: true
+      properties:
+        category_key:
+          type: string
+        channel:
+          $ref: '#/components/schemas/NotificationChannel'
+        opted_in:
+          type: boolean
+    BulkSetUserPreferencesRequest_preferences_inner:
+      example:
+        category_key: category_key
+        channel: email
+        opted_in: true
+      properties:
+        category_key:
+          type: string
+        channel:
+          $ref: '#/components/schemas/NotificationChannel'
+        opted_in:
+          type: boolean
+      required:
+      - category_key
+      - channel
+      - opted_in
+  securitySchemes:
+    apiKey:
+      description: |
+        API key issued per environment. Pass as `Authorization: Bearer <key>`.
+      scheme: bearer
+      type: http
+    cookieAuth:
+      description: Dashboard session cookie (used only by OAuth install/callback routes).
+      in: cookie
+      name: .AspNetCore.Cookies
+      type: apiKey
+    inboxJwt:
+      description: Short-lived inbox JWT issued by `POST /inbox/v1/tokens/verify`.
+      scheme: bearer
+      type: http

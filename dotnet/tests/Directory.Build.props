@@ -1,0 +1,18 @@
+<Project>
+
+  <!--
+    Test projects deliberately do not inherit the packaging and strictness policy
+    that dotnet/Directory.Build.props applies to the shipped SDK packages.
+    Importing it and relaxing three properties keeps shared settings (LangVersion,
+    Nullable, ImplicitUsings) aligned with the SDK while leaving the test sources
+    exactly as they build in a plain test project.
+  -->
+  <Import Project="$(MSBuildThisFileDirectory)..\Directory.Build.props" />
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+</Project>

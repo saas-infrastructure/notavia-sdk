@@ -1,0 +1,12 @@
+{
+  "name": "notavia-typescript-workspace",
+  "private": true,
+  "description": "Workspace root. Not published. Links the sibling packages so a component package can depend on its client by version range rather than by file path.",
+  "workspaces": [
+    "notifyservice-inbox-client",
+    "notifyservice-prefs-client",
+    "notifyservice-sdk",
+    "notifyservice-inbox",
+    "notifyservice-prefs"
+  ]
+}

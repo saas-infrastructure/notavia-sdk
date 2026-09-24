@@ -1,0 +1,8 @@
+generatorName: python
+packageName: notifyservice_api
+projectName: notifyservice
+library: urllib3
+additionalProperties:
+  packageVersion: "1.0.0"
+  generateSourceCodeOnly: "true"
+  hideGenerationTimestamp: "true"

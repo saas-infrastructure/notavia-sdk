@@ -1,0 +1,56 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <PackageId>Notavia.Prefs.Blazor</PackageId>
+    <AssemblyName>Notavia.Prefs.Blazor</AssemblyName>
+    <Description>Blazor Razor component that mounts the Notavia preference centre web component, bridging events to EventCallback&lt;T&gt; parameters via JS interop.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>notavia;prefs;preferences;blazor;component;saasinfrastructure</PackageTags>
+    <RootNamespace>NotifyService.Prefs.Blazor</RootNamespace>
+    <StaticWebAssetBasePath>_content/NotifyService.Prefs.Blazor</StaticWebAssetBasePath>
+    <IsPackable>true</IsPackable>
+    <NoWarn>$(NoWarn);NU5119</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" Condition="Exists('README.md')" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <PrefsWebComponentDist>$(MSBuildThisFileDirectory)..\..\typescript\notifyservice-prefs\dist\notifyservice-prefs.umd.js</PrefsWebComponentDist>
+    <PrefsWebComponentMap>$(MSBuildThisFileDirectory)..\..\typescript\notifyservice-prefs\dist\notifyservice-prefs.umd.js.map</PrefsWebComponentMap>
+    <PrefsClientDist>$(MSBuildThisFileDirectory)..\..\typescript\notifyservice-prefs-client\dist\index.cjs</PrefsClientDist>
+  </PropertyGroup>
+
+  <Target Name="VendorPrefsWebComponent" BeforeTargets="ResolveStaticWebAssetsInputs">
+    <Error
+      Condition="!Exists('$(PrefsWebComponentDist)')"
+      Text="Missing $(PrefsWebComponentDist). Run 'npm run build' in sdks/typescript/notifyservice-prefs first." />
+    <Error
+      Condition="!Exists('$(PrefsClientDist)')"
+      Text="Missing $(PrefsClientDist). Run 'npm run build' in sdks/typescript/notifyservice-prefs-client first." />
+    <Copy
+      SourceFiles="$(PrefsWebComponentDist)"
+      DestinationFiles="$(MSBuildThisFileDirectory)wwwroot\notifyservice-prefs.umd.js"
+      SkipUnchangedFiles="true" />
+    <Copy
+      Condition="Exists('$(PrefsWebComponentMap)')"
+      SourceFiles="$(PrefsWebComponentMap)"
+      DestinationFiles="$(MSBuildThisFileDirectory)wwwroot\notifyservice-prefs.umd.js.map"
+      SkipUnchangedFiles="true" />
+    <Copy
+      SourceFiles="$(PrefsClientDist)"
+      DestinationFiles="$(MSBuildThisFileDirectory)wwwroot\notifyservice-prefs-client.umd.js"
+      SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>
